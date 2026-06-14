@@ -1116,14 +1116,14 @@ fun ProfilesTab(
             }
         }
 
-        if (sortedProfiles.isEmpty()) {
+        if (profiles.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 48.dp, horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
+                Column( 
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
