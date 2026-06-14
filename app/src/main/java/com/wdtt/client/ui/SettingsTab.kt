@@ -1159,7 +1159,7 @@ fun SettingsTabContent(
             ) {
                 Icon(Icons.Default.Tag, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("VK Хеши", fontWeight = FontWeight.SemiBold)
+                Text("VK Хеши ($filledHashCount)", fontWeight = FontWeight.SemiBold)
             }
 
             val errorTexts = hashErrors.filter { !it.contains("короткий") }
