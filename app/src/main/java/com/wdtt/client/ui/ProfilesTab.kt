@@ -1127,7 +1127,7 @@ fun ProfilesTab(
                     .padding(vertical = 48.dp, horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column( 
+                Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
@@ -1399,12 +1399,18 @@ fun ProfilesTab(
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                 }
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
                                     Text(
                                         text = obfuscatePeer(profile.peer),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
                                     val pingMs = pingResults[profile.id]
                                     if (pingMs != null) {
@@ -1416,9 +1422,11 @@ fun ProfilesTab(
                                         }
                                         Box(modifier = Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(color))
                                         Text(
-                                            if (pingMs < 0) "Fail" else "${pingMs}ms",
+                                            text = if (pingMs < 0) "Fail" else "${pingMs}ms",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = color
+                                            color = color,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                 }
