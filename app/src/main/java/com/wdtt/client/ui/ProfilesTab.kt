@@ -119,6 +119,7 @@ import androidx.compose.material.rememberDismissState
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.graphicsLayer
@@ -302,7 +303,17 @@ fun ProfilesTab(
         }
     }
 
-    val sortedProfiles = profiles
+    var sortByPing by rememberSaveable { mutableStateOf(false) }
+    val displayProfiles = remember(profiles, pingResults.toMap(), sortByPing) {
+        if (sortByPing) {
+            profiles.sortedWith(compareBy<ConnectionProfile> {
+                val ping = pingResults[it.id]
+                if (ping != null && ping >= 0) ping else Long.MAX_VALUE
+            }.thenBy { it.name })
+        } else {
+            profiles
+        }
+    }
     val currentPeer by settingsStore.peer.collectAsStateWithLifecycle(initialValue = "")
     val currentHashes by settingsStore.vkHashes.collectAsStateWithLifecycle(initialValue = "")
     val currentWorkers by settingsStore.workersPerHash.collectAsStateWithLifecycle(initialValue = 16)
@@ -333,8 +344,8 @@ fun ProfilesTab(
     val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56000)
     val savedManualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
 
-    val visibleProfiles = remember(profiles, pendingDeletes, selectedFilterGroup) {
-        profiles.filterNot { pendingDeletes.contains(it.id) }.filter {
+    val visibleProfiles = remember(displayProfiles, pendingDeletes, selectedFilterGroup) {
+        displayProfiles.filterNot { pendingDeletes.contains(it.id) }.filter {
             if (selectedFilterGroup == null) true
             else it.groupId == selectedFilterGroup
         }
@@ -1016,6 +1027,16 @@ fun ProfilesTab(
                     )
                 }
 
+                androidx.compose.material3.IconButton(
+                    onClick = { sortByPing = !sortByPing }
+                ) {
+                    androidx.compose.material3.Icon(
+                        imageVector = Icons.Filled.Sort,
+                        contentDescription = "Сортировать по пингу",
+                        tint = if (sortByPing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 androidx.compose.foundation.layout.Box {
                     androidx.compose.material3.IconButton(
                         onClick = { showMoreMenu = true }
@@ -1256,6 +1277,10 @@ fun ProfilesTab(
                         .pointerInput(profile.id) {
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { offset ->
+                                    if (sortByPing) {
+                                        Toast.makeText(context, "Отключите сортировку по пингу для ручного перемещения", Toast.LENGTH_SHORT).show()
+                                        return@detectDragGesturesAfterLongPress
+                                    }
                                     isDragging = true
                                     draggedIndex = draggingList.indexOfFirst { it.id == profile.id }
                                     dragOffset = 0f
@@ -1566,20 +1591,61 @@ fun ProfilesTab(
 
     val isPingingAny = pingingState.values.any { it }
     if (isPingingAny) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Замер задержки", style = MaterialTheme.typography.titleMedium) },
-            text = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+        androidx.compose.ui.window.Dialog(onDismissRequest = { }) {
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    Text("Выполняется проверка...\nЭто может занять до 20 секунд.", style = MaterialTheme.typography.bodyMedium)
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SignalCellularAlt,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    
+                    Text(
+                        text = "Замер задержки",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    Text(
+                        text = "Проверяем доступность и измеряем скорость подключения. Это может занять до 20 секунд.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    
+                    androidx.compose.material3.LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+                    )
                 }
-            },
-            confirmButton = { }
-        )
+            }
+        }
     }
 
     if (showCreateSheet) {
