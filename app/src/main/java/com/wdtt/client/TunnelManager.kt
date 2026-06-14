@@ -37,7 +37,11 @@ object TunnelManager {
     private var process: Process? = null
     private var readerJob: Job? = null
     private var watchdogJob: Job? = null
+    private var detailedLogsJob: Job? = null
     private var wgHelper: WireGuardHelper? = null
+    
+    @Volatile
+    private var isDetailedLogsEnabled = false
 
     // Error counters for circuit breaker
     private var floodCount = 0
@@ -124,7 +128,7 @@ object TunnelManager {
             val sorted = current.sortedWith(compareBy({ it.priority }, { if (it.isError) 1 else 0 }, { it.key }))
 
             // Лимит 100 записей
-            if (sorted.size > 100) sorted.takeLast(100) else sorted
+            if (sorted.size > 100) sorted.take(100) else sorted
         }
     }
 
@@ -138,6 +142,13 @@ object TunnelManager {
             clearLogs()
             config.value = null
             stats.value = "Ожидание данных..."
+            
+            detailedLogsJob?.cancel()
+            detailedLogsJob = scope.launch {
+                SettingsStore(appContext).detailedLogs.collect {
+                    isDetailedLogsEnabled = it
+                }
+            }
             floodCount = 0
             mismatchCount = 0
             refusedCount = 0
@@ -217,6 +228,7 @@ object TunnelManager {
                 
                 if (!binaryFile.exists()) {
                     updateLog("binary_error", "Ошибка: Бинарный файл не найден", 99, true)
+                    running.value = false
                     return@launch
                 }
 
@@ -582,11 +594,25 @@ object TunnelManager {
                             }
                         }
                         return@forEachLine
+                    } else if (lineTrim.isNotEmpty() && !lineTrim.contains("ВОРКЕР") && !lineTrim.contains("ПИНГ") && !lineTrim.contains("Байт/сек")) {
+                        // Если строка вообще ни подо что не подошла (например, panic или linker error)
+                        if (isDetailedLogsEnabled || isError) {
+                            updateLog("go_unhandled_${lineTrim.hashCode()}", "[Go] $lineTrim", 90, isError)
+                        }
                     }
                 }
             } catch (e: Exception) {
                 updateLog("sys_error", "Процесс остановлен: ${e.message}", -1, true)
             } finally {
+                // Если процесс умер сам, ловим код выхода
+                try {
+                    val exitCode = process?.exitValue()
+                    if (exitCode != null && exitCode != 0) {
+                        updateLog("sys_exit", "Процесс крашнулся с кодом $exitCode", 99, true)
+                    }
+                } catch (_: IllegalThreadStateException) {
+                    process?.destroy()
+                }
                 running.value = false
                 process = null
             }
@@ -961,5 +987,6 @@ data class TunnelParams(
     val connectionPassword: String = "",
     val protocol: String = "udp",
     val captchaMode: String = "auto", // "auto", "wv" или "rjs"
-    val captchaSolveMethod: String = "auto" // "manual" или "auto"
+    val captchaSolveMethod: String = "auto", // "manual" или "auto"
+    val detailedLogs: Boolean = false
 )

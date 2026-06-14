@@ -22,6 +22,7 @@ class SettingsStore(context: Context) {
         private val Context.dataStore by preferencesDataStore("settings")
         private val PEER = stringPreferencesKey("peer")
         private val VK_HASHES = stringPreferencesKey("vk_hashes")
+        private val GLOBAL_VK_HASHES = stringPreferencesKey("global_vk_hashes")
         private val SECONDARY_VK_HASH = stringPreferencesKey("secondary_vk_hash")
         private val WORKERS_PER_HASH = intPreferencesKey("workers_per_hash")
         private val PROTOCOL = stringPreferencesKey("protocol")
@@ -109,7 +110,8 @@ class SettingsStore(context: Context) {
 
     val peer: Flow<String> = dataStore.data.map { it[PEER] ?: "" }
     val vkHashes: Flow<String> = dataStore.data.map { it[VK_HASHES] ?: "" }
-    val secondaryVkHash: Flow<String> = dataStore.data.map { it[SECONDARY_VK_HASH] ?: "" }
+    val globalVkHashes: Flow<String> = appContext.dataStore.data.map { it[GLOBAL_VK_HASHES] ?: "" }
+    val secondaryVkHash: Flow<String> = appContext.dataStore.data.map { it[SECONDARY_VK_HASH] ?: "" }
     val workersPerHash: Flow<Int> = dataStore.data.map { it[WORKERS_PER_HASH] ?: 16 }
     val protocol: Flow<String> = dataStore.data.map { it[PROTOCOL] ?: "udp" }
     val listenPort: Flow<Int> = dataStore.data.map { it[LISTEN_PORT] ?: 9000 }
@@ -182,7 +184,7 @@ class SettingsStore(context: Context) {
     val updateLastCheckAt: Flow<Long> = dataStore.data.map { it[UPDATE_LAST_CHECK_AT] ?: 0L }
     val updateLatestVersion: Flow<String> = dataStore.data.map { it[UPDATE_LATEST_VERSION] ?: "" }
     val updateLastError: Flow<String> = dataStore.data.map { it[UPDATE_LAST_ERROR] ?: "" }
-    val updateCheckIntervalHours: Flow<Int> = dataStore.data.map { it[UPDATE_CHECK_INTERVAL_HOURS] ?: DEFAULT_UPDATE_CHECK_INTERVAL_HOURS }
+    val updateCheckIntervalHours: Flow<Int> = dataStore.data.map { it[UPDATE_CHECK_INTERVAL_HOURS] ?: 24 }
     val updatePostponeUntil: Flow<Long> = dataStore.data.map { it[UPDATE_POSTPONE_UNTIL] ?: 0L }
     val updatePostponeVersion: Flow<String> = dataStore.data.map { it[UPDATE_POSTPONE_VERSION] ?: "" }
     val updateDialogLastShownVersion: Flow<String> = dataStore.data.map { it[UPDATE_DIALOG_LAST_SHOWN_VERSION] ?: "" }
@@ -283,27 +285,26 @@ class SettingsStore(context: Context) {
         noDns: Boolean = false
     ) {
         dataStore.edit { prefs ->
-            val isChanged = prefs[PEER] != peer ||
-                            prefs[VK_HASHES] != vkHashes ||
-                            prefs[SECONDARY_VK_HASH] != secondaryVkHash ||
-                            prefs[WORKERS_PER_HASH] != workersPerHash ||
-                            prefs[PROTOCOL] != protocol ||
-                            prefs[LISTEN_PORT] != listenPort ||
-                            prefs[SNI] != sni ||
-                            prefs[NO_DNS] != noDns
+            val cleanVkHashes = vkHashes.split(Regex("[,\\s\\n]+"))
+                .map { stripVkUrlStatic(it) }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(",")
+                
+            val storedVkHashes = (prefs[VK_HASHES] ?: "").split(Regex("[,\\s\\n]+"))
+                .map { stripVkUrlStatic(it) }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(",")
 
             prefs[PEER] = peer
-            prefs[VK_HASHES] = vkHashes
+            prefs[VK_HASHES] = cleanVkHashes
             prefs[SECONDARY_VK_HASH] = secondaryVkHash
             prefs[WORKERS_PER_HASH] = workersPerHash
             prefs[PROTOCOL] = protocol
             prefs[LISTEN_PORT] = listenPort
             prefs[SNI] = sni
             prefs[NO_DNS] = noDns
-            if (isChanged) {
-                prefs[CURRENT_PROFILE_ID] = ""
-                prefs[CURRENT_PROFILE_NAME] = ""
-            }
         }
     }
 
@@ -325,6 +326,10 @@ class SettingsStore(context: Context) {
         dataStore.edit { prefs ->
             prefs[USER_AGENT] = ua
         }
+    }
+
+    suspend fun saveGlobalVkHashes(hashes: String) {
+        appContext.dataStore.edit { it[GLOBAL_VK_HASHES] = hashes }
     }
 
     suspend fun saveDeploy(ip: String, login: String, pass: String, sshPort: String, dns1: String, dns2: String) {
@@ -462,4 +467,29 @@ class SettingsStore(context: Context) {
             }
         }
     }
+}
+
+/** Извлекает хеш из VK ссылки */
+fun stripVkUrlStatic(input: String): String {
+    var s = input.trim()
+    val lower = s.lowercase()
+    val prefixes = listOf(
+        "https://vk.com/call/join/",
+        "http://vk.com/call/join/",
+        "https://m.vk.com/call/join/",
+        "http://m.vk.com/call/join/",
+        "m.vk.com/call/join/",
+        "vk.com/call/join/"
+    )
+    for (prefix in prefixes) {
+        if (lower.startsWith(prefix)) {
+            s = s.substring(prefix.length)
+            break
+        }
+    }
+    val qIdx = s.indexOf('?')
+    if (qIdx != -1) s = s.substring(0, qIdx)
+    val hIdx = s.indexOf('#')
+    if (hIdx != -1) s = s.substring(0, hIdx)
+    return s.trimEnd('/')
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.preferencesDataStore
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import java.util.UUID
 
 data class ConnectionProfile(
@@ -24,7 +26,8 @@ data class ConnectionProfile(
     val listenPort: Int,
     val password: String,
     val trafficMb: Double = 0.0,
-    val groupId: String = ""
+    val groupId: String = "",
+    val useGlobalHashes: Boolean = true
 )
 
 data class ProfileGroup(
@@ -47,6 +50,7 @@ class ProfilesStore(context: Context) {
         private fun workersKey(id: String) = intPreferencesKey("profile_workers_$id")
         private fun portKey(id: String) = intPreferencesKey("profile_port_$id")
         private fun passKey(id: String) = stringPreferencesKey("profile_pass_enc_$id")
+        private fun useGlobalHashesKey(id: String) = booleanPreferencesKey("profile_use_global_hashes_$id")
         private fun trafficKey(id: String) = androidx.datastore.preferences.core.doublePreferencesKey("profile_traffic_$id")
         private fun groupIdKey(id: String) = stringPreferencesKey("profile_group_id_$id")
 
@@ -75,7 +79,8 @@ class ProfilesStore(context: Context) {
                 val pass = secureStore.decrypt(enc) ?: ""
                 val traffic = prefs[trafficKey(id)] ?: 0.0
                 val groupId = prefs[groupIdKey(id)] ?: ""
-                list.add(ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId))
+                val useGlobal = prefs[useGlobalHashesKey(id)] ?: true
+                list.add(ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId, useGlobal))
             }
             list
         }
@@ -109,6 +114,7 @@ class ProfilesStore(context: Context) {
             prefs[passKey(profile.id)] = secureStore.encrypt(profile.password)
             prefs[trafficKey(profile.id)] = profile.trafficMb
             prefs[groupIdKey(profile.id)] = profile.groupId
+            prefs[useGlobalHashesKey(profile.id)] = profile.useGlobalHashes
         }
     }
 
@@ -134,6 +140,7 @@ class ProfilesStore(context: Context) {
             prefs.remove(workersKey(id))
             prefs.remove(portKey(id))
             prefs.remove(passKey(id))
+            prefs.remove(useGlobalHashesKey(id))
             prefs.remove(trafficKey(id))
             prefs.remove(groupIdKey(id))
         }
@@ -206,13 +213,20 @@ class ProfilesStore(context: Context) {
     suspend fun applyProfile(context: Context, id: String, startImmediately: Boolean = false) {
         val p = getProfileOnce(id) ?: return
         // save to settings
-        settings.save(p.peer, p.vkHashes, "", p.workersPerHash, "udp", p.listenPort)
+        val finalHashes = if (p.useGlobalHashes) {
+            val global = settings.vkHashes.first()
+            global.ifEmpty { p.vkHashes }
+        } else {
+            p.vkHashes
+        }
+        settings.save(p.peer, finalHashes, "", p.workersPerHash, "udp", p.listenPort)
         settings.saveConnectionPassword(p.password)
         settings.saveCurrentProfile(p.id, p.name)
         if (startImmediately) {
             val captchaMode = settings.captchaMode.first()
             val captchaSolve = settings.captchaSolveMethod.first()
-            val params = TunnelParams(p.peer, p.vkHashes, "", p.workersPerHash, p.listenPort, "", p.password, "udp", captchaMode, captchaSolve)
+            val detailedLogs = settings.detailedLogs.first()
+            val params = TunnelParams(p.peer, finalHashes, "", p.workersPerHash, p.listenPort, "", p.password, "udp", captchaMode, captchaSolve, detailedLogs)
             TunnelManager.start(context, params)
         }
     }

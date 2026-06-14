@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -75,6 +76,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.draw.scale
 import com.wdtt.client.isNewerVersion
+import com.wdtt.client.stripVkUrlStatic
 
 private const val WORKERS_PER_GROUP = 9
 
@@ -135,6 +137,7 @@ fun SettingsTabContent(
     val tunnelRunning by TunnelManager.running.collectAsStateWithLifecycle()
     val autoSwitchToLogs by settingsStore.autoSwitchToLogs.collectAsStateWithLifecycle(initialValue = true)
     val showSpeedGraph by settingsStore.showSpeedGraph.collectAsStateWithLifecycle(initialValue = true)
+    val detailedLogs by settingsStore.detailedLogs.collectAsStateWithLifecycle(initialValue = false)
     val updateCheckIntervalHours by settingsStore.updateCheckIntervalHours.collectAsStateWithLifecycle(
         initialValue = com.wdtt.client.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
     )
@@ -171,11 +174,17 @@ fun SettingsTabContent(
     var serverWgPortInput by rememberSaveable { mutableStateOf("56001") }
     var showAppSettingsDialog by rememberSaveable { mutableStateOf(false) }
 
-    val allHashes = remember(vkHash1, vkHash2, vkHash3, vkHash4) { listOf(vkHash1, vkHash2, vkHash3, vkHash4) }
-    val uniqueHashes = remember(vkHash1, vkHash2, vkHash3, vkHash4) { allHashes.filter { it.isNotBlank() && it.length >= 16 }.distinct() }
-    val filledHashCount = remember(vkHash1, vkHash2, vkHash3, vkHash4) { uniqueHashes.size }
-    val combinedHashes = remember(vkHash1, vkHash2, vkHash3, vkHash4) { uniqueHashes.joinToString(",") }
+    val currentHashesRaw by settingsStore.vkHashes.collectAsStateWithLifecycle(initialValue = "")
+    val uniqueHashes = remember(currentHashesRaw) { 
+        currentHashesRaw.split(Regex("[,\\s\\n]+"))
+            .filter { it.isNotBlank() && it.length >= 16 }
+            .distinct()
+    }
+    val filledHashCount = uniqueHashes.size
+    val combinedHashes = uniqueHashes.joinToString(",")
     val dynamicMaxWorkers = remember(filledHashCount) { (filledHashCount.coerceAtLeast(1) * 27).toFloat() }
+    
+    val globalHashesRaw by settingsStore.globalVkHashes.collectAsStateWithLifecycle(initialValue = "")
     var portInput by rememberSaveable { mutableStateOf("9000") }
     var sniInput by rememberSaveable { mutableStateOf("") }
 
@@ -187,27 +196,20 @@ fun SettingsTabContent(
 
     val currentWorkers = workersInput.coerceIn(WORKERS_PER_GROUP.toFloat(), dynamicMaxWorkers)
 
-    val hashErrors = remember(vkHash1, vkHash2, vkHash3, vkHash4) {
+    val hashErrors = remember(currentHashesRaw) {
         buildList {
-            allHashes.forEachIndexed { i, h ->
+            val parts = currentHashesRaw.split(Regex("[,\\s\\n]+")).filter { it.isNotEmpty() }
+            parts.forEachIndexed { i, h ->
                 if (h.isNotBlank() && h.length < 16) add("Хеш ${i + 1} — короткий")
             }
-            val filled = allHashes.filter { it.isNotBlank() && it.length >= 16 }
+            val filled = parts.filter { it.isNotBlank() && it.length >= 16 }
             if (filled.size != filled.distinct().size) add("Есть дубликаты хешей")
         }
     }
-    val hasInputHashErrors = remember(vkHash1, vkHash2, vkHash3, vkHash4) { hashErrors.isNotEmpty() }
+    val hasInputHashErrors = hashErrors.isNotEmpty()
 
     var showSecretsDialog by rememberSaveable { mutableStateOf(false) }
     var initialized by remember { mutableStateOf(false) }
-
-    fun parseHashes(raw: String) {
-        val parts = raw.split(Regex("[,\\s\\n]+")).map { stripVkUrlStatic(it) }.filter { it.isNotEmpty() }
-        vkHash1 = parts.getOrElse(0) { "" }
-        vkHash2 = parts.getOrElse(1) { "" }
-        vkHash3 = parts.getOrElse(2) { "" }
-        vkHash4 = parts.getOrElse(3) { "" }
-    }
 
     fun normalizeHashes(vararg hashes: String): String {
         return hashes
@@ -231,8 +233,7 @@ fun SettingsTabContent(
         val wbvCaptchaMethod = settingsStore.captchaWbvSolveMethod.first()
         
         peerInput = peer
-        parseHashes(hashes)
-        workersInput = roundToGroup(workers.toFloat(), (listOf(vkHash1, vkHash2, vkHash3, vkHash4).count { it.isNotBlank() }.coerceAtLeast(1) * 27).toFloat())
+        workersInput = roundToGroup(workers.toFloat(), (uniqueHashes.size.coerceAtLeast(1) * 27).toFloat())
         portInput = port.toString()
         manualPortsEnabled = manualPorts
         serverDtlsPortInput = serverDtlsPort.toString()
@@ -352,7 +353,7 @@ fun SettingsTabContent(
         }
     }
 
-    val isPeerValid = peerInput.isNotBlank() && !peerInput.contains(":")
+    val isPeerValid = peerInput.isNotBlank()
     val isHashesValid = combinedHashes.isNotBlank()
     val isValid = isPeerValid && isHashesValid && savedConnectionPassword.isNotBlank() && !hasInputHashErrors
     val effectiveServerDtlsPort = if (manualPortsEnabled) serverDtlsPortInput.toIntOrNull()?.coerceIn(1, 65535) ?: 56000 else 56000
@@ -429,22 +430,30 @@ fun SettingsTabContent(
     }
 
     if (showHashesDialog) {
+        val globalParts = globalHashesRaw.split(Regex("[,\\s\\n]+")).filter { it.isNotEmpty() }
         HashesDialog(
-            hash1 = vkHash1,
-            hash2 = vkHash2,
-            hash3 = vkHash3,
-            hash4 = vkHash4,
+            hash1 = globalParts.getOrElse(0) { "" },
+            hash2 = globalParts.getOrElse(1) { "" },
+            hash3 = globalParts.getOrElse(2) { "" },
+            hash4 = globalParts.getOrElse(3) { "" },
             onSave = { h1, h2, h3, h4 ->
                 val cleaned1 = stripVkUrlStatic(h1)
                 val cleaned2 = stripVkUrlStatic(h2)
                 val cleaned3 = stripVkUrlStatic(h3)
                 val cleaned4 = stripVkUrlStatic(h4)
-                vkHash1 = cleaned1
-                vkHash2 = cleaned2
-                vkHash3 = cleaned3
-                vkHash4 = cleaned4
-                saveTunnelSettingsNow(normalizeHashes(cleaned1, cleaned2, cleaned3, cleaned4)) {
-                    showHashesDialog = false
+                val combined = normalizeHashes(cleaned1, cleaned2, cleaned3, cleaned4)
+                
+                scope.launch {
+                    settingsStore.saveGlobalVkHashes(combined)
+                    val currentProfileIdStr = settingsStore.currentProfileId.first()
+                    // Apply to current tunnel if no profile is active, or if current profile uses global hashes
+                    if (currentProfileIdStr.isEmpty()) {
+                        saveTunnelSettingsNow(combined) { showHashesDialog = false }
+                    } else {
+                        // Profile is active, we don't auto-update tunnel unless we re-apply the profile
+                        // To be safe, we just close the dialog. If the user reconnects, it'll apply.
+                        showHashesDialog = false
+                    }
                 }
             },
             onDismiss = { showHashesDialog = false }
@@ -635,6 +644,33 @@ fun SettingsTabContent(
                             checked = showSpeedGraph,
                             onCheckedChange = { enabled ->
                                 scope.launch { settingsStore.saveShowSpeedGraph(enabled) }
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                "Подробные логи",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "Записывать больше диагностической информации (замедляет работу)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = detailedLogs,
+                            onCheckedChange = { enabled ->
+                                scope.launch { settingsStore.saveDetailedLogs(enabled) }
                             }
                         )
                     }
@@ -1042,12 +1078,36 @@ fun SettingsTabContent(
                                 onClick = {
                                     expanded = false
                                     scope.launch {
-                                        profilesStore.applyProfile(context, p.id, startImmediately = false)
+                                        val global = settingsStore.vkHashes.first()
+                                        val effectiveHashes = if (p.useGlobalHashes) global.ifEmpty { p.vkHashes } else p.vkHashes
+                                        
+                                        // Clean hashes to prevent mismatch with combinedHashes and avoid false '*'
+                                        val cleanedHashes = effectiveHashes.split(Regex("[,\\s\\n]+"))
+                                            .map { it.trim() }
+                                            .filter { it.isNotBlank() }
+                                            .distinct()
+                                            .joinToString(",")
+
+                                        profilesStore.applyProfile(context, p.id, startImmediately = tunnelRunning)
+                                        
                                         // Update state inputs in UI immediately
                                         peerInput = p.peer
-                                        parseHashes(p.vkHashes)
                                         workersInput = p.workersPerHash.toFloat()
                                         portInput = p.listenPort.toString()
+                                        
+                                        // Auto-reconnect if tunnel is already running
+                                        if (tunnelRunning) {
+                                            TunnelManager.stop()
+                                            kotlinx.coroutines.delay(500)
+                                            val captchaMode = settingsStore.captchaMode.first()
+                                            val captchaSolve = settingsStore.captchaSolveMethod.first()
+                                            val isDetailedLogs = settingsStore.detailedLogs.first()
+                                            val params = com.wdtt.client.TunnelParams(
+                                                p.peer, cleanedHashes, "", p.workersPerHash, p.listenPort, "", p.password, "udp", captchaMode, captchaSolve, isDetailedLogs
+                                            )
+                                            TunnelManager.start(context, params, isSwitching = true)
+                                        }
+
                                         Toast.makeText(context, "Профиль «${p.name}» применен!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
@@ -1071,8 +1131,8 @@ fun SettingsTabContent(
                     peerInput = it.filter { c -> c != ' ' }
                     scheduleSave()
                 },
-                label = { Text("IP сервера или домен (без порта)") },
-                placeholder = { Text("1.2.3.4 (или test.com)") },
+                label = { Text("IP сервера или домен (с портом или без)") },
+                placeholder = { Text("1.2.3.4 или 1.2.3.4:56000") },
                 singleLine = true,
                 isError = !isPeerValid && peerInput.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth(),
@@ -1099,7 +1159,7 @@ fun SettingsTabContent(
             ) {
                 Icon(Icons.Default.Tag, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Настройка VK Хешей ($filledHashCount/4)", fontWeight = FontWeight.SemiBold)
+                Text("VK Хеши", fontWeight = FontWeight.SemiBold)
             }
 
             val errorTexts = hashErrors.filter { !it.contains("короткий") }
@@ -1572,31 +1632,6 @@ private fun InfoSection(title: String, body: String) {
 private fun roundToGroup(value: Float, maxW: Float = 96f): Float {
     val rounded = (Math.round(value / WORKERS_PER_GROUP) * WORKERS_PER_GROUP).toFloat()
     return rounded.coerceIn(WORKERS_PER_GROUP.toFloat(), maxW)
-}
-
-/** Извлекает хеш из VK ссылки */
-private fun stripVkUrlStatic(input: String): String {
-    var s = input.trim()
-    val lower = s.lowercase()
-    val prefixes = listOf(
-        "https://vk.com/call/join/",
-        "http://vk.com/call/join/",
-        "https://m.vk.com/call/join/",
-        "http://m.vk.com/call/join/",
-        "m.vk.com/call/join/",
-        "vk.com/call/join/"
-    )
-    for (prefix in prefixes) {
-        if (lower.startsWith(prefix)) {
-            s = s.substring(prefix.length)
-            break
-        }
-    }
-    val qIdx = s.indexOf('?')
-    if (qIdx != -1) s = s.substring(0, qIdx)
-    val hIdx = s.indexOf('#')
-    if (hIdx != -1) s = s.substring(0, hIdx)
-    return s.trimEnd('/')
 }
 
 // ═══ Модальное окно хешей ═══

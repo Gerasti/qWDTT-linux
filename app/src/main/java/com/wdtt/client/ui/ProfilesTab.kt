@@ -59,6 +59,7 @@ import java.net.URL
 import java.net.URLEncoder
 import com.wdtt.client.SettingsStore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -113,8 +114,11 @@ import androidx.compose.material.FractionalThreshold
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.rememberDismissState
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.graphicsLayer
@@ -141,6 +145,27 @@ fun ProfilesTab(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val snackbarHostState = remember { SnackbarHostState() }
     var groupToExport by remember { mutableStateOf<ProfileGroup?>(null) }
+    val globalHashes by settingsStore.globalVkHashes.collectAsStateWithLifecycle(initialValue = "")
+
+    val pingResults = com.wdtt.client.PingHelper.pingResults
+    val pingingState = com.wdtt.client.PingHelper.pingingState
+
+    fun pingProfile(profile: ConnectionProfile) {
+        if (pingingState[profile.id] == true) return
+        pingingState[profile.id] = true
+        scope.launch {
+            // Resolve effective hashes: use global if profile says so
+            val effectiveHashes = if (profile.useGlobalHashes) globalHashes.ifEmpty { profile.vkHashes } else profile.vkHashes
+            val profileWithHashes = profile.copy(vkHashes = effectiveHashes)
+            val result = com.wdtt.client.PingHelper.measurePing(context, profileWithHashes)
+            pingResults[profile.id] = result
+            pingingState[profile.id] = false
+        }
+    }
+
+    fun pingAllProfiles(list: List<ConnectionProfile>) {
+        list.forEach { pingProfile(it) }
+    }
 
     val exportZipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) {
@@ -293,6 +318,7 @@ fun ProfilesTab(
     var workersInput by rememberSaveable { mutableStateOf("16") }
     var portInput by rememberSaveable { mutableStateOf("9000") }
     var passwordInput by rememberSaveable { mutableStateOf("") }
+    var useGlobalHashesInput by rememberSaveable { mutableStateOf(true) }
     var showGroupManagement by rememberSaveable { mutableStateOf(false) }
     var selectedFilterGroup by rememberSaveable { mutableStateOf<String?>(null) }
     var moveToGroupTarget by rememberSaveable { mutableStateOf<ConnectionProfile?>(null) }
@@ -307,8 +333,8 @@ fun ProfilesTab(
     val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56000)
     val savedManualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
 
-    val visibleProfiles = remember(sortedProfiles, pendingDeletes, selectedFilterGroup) {
-        sortedProfiles.filterNot { pendingDeletes.contains(it.id) }.filter {
+    val visibleProfiles = remember(profiles, pendingDeletes, selectedFilterGroup) {
+        profiles.filterNot { pendingDeletes.contains(it.id) }.filter {
             if (selectedFilterGroup == null) true
             else it.groupId == selectedFilterGroup
         }
@@ -416,6 +442,7 @@ fun ProfilesTab(
         portInput = (profile?.listenPort ?: currentPort).toString()
         portInput = (profile?.listenPort ?: currentPort).toString()
         passwordInput = profile?.password ?: currentPassword
+        useGlobalHashesInput = profile?.useGlobalHashes ?: true
         editorVisible = true
     }
 
@@ -430,15 +457,17 @@ fun ProfilesTab(
         val port = portInput.toIntOrNull()?.coerceIn(1, 65535) ?: 9000
         val password = passwordInput
         
-        if (name.isBlank() || peer.isBlank() || hashes.isBlank() || password.isBlank()) {
+        if (name.isBlank() || peer.isBlank() || (!useGlobalHashesInput && hashes.isBlank()) || password.isBlank()) {
             editorVisible = true // Revert if validation fails
             return
         }
 
         val currentEditId = editingProfileId
+        val useGlobal = useGlobalHashesInput
         scope.launch {
             if (currentEditId == null) {
-                profilesStore.createProfile(name, peer, hashes, workers, port, password, "")
+                val p = profilesStore.createProfile(name, peer, hashes, workers, port, password, "")
+                profilesStore.saveProfile(p.copy(useGlobalHashes = useGlobal))
             } else {
                 val existingProfile = profiles.firstOrNull { it.id == currentEditId }
                 val existingTraffic = existingProfile?.trafficMb ?: 0.0
@@ -453,7 +482,8 @@ fun ProfilesTab(
                         listenPort = port,
                         password = password,
                         trafficMb = existingTraffic,
-                        groupId = existingGroupId
+                        groupId = existingGroupId,
+                        useGlobalHashes = useGlobal
                     )
                 )
             }
@@ -463,12 +493,48 @@ fun ProfilesTab(
     if (editorVisible) {
         AlertDialog(
             onDismissRequest = { editorVisible = false },
+            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = false),
+            modifier = Modifier.imePadding(),
             title = { Text(if (editingProfileId == null) "Новый профиль" else "Редактировать профиль") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
                     OutlinedTextField(value = nameInput, onValueChange = { nameInput = it }, label = { Text("Название") }, singleLine = true)
                     OutlinedTextField(value = peerInput, onValueChange = { peerInput = it }, label = { Text("Peer") }, singleLine = true)
-                    OutlinedTextField(value = hashesInput, onValueChange = { hashesInput = it }, label = { Text("VK-хеши") }, minLines = 2)
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { useGlobalHashesInput = !useGlobalHashesInput }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Использовать общий хеш",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        androidx.compose.material3.Switch(
+                            checked = useGlobalHashesInput,
+                            onCheckedChange = { useGlobalHashesInput = it }
+                        )
+                    }
+
+                    if (!useGlobalHashesInput) {
+                        OutlinedTextField(value = hashesInput, onValueChange = { hashesInput = it }, label = { Text("VK-хеши") }, minLines = 2)
+                    } else {
+                        OutlinedTextField(
+                            value = globalHashes.ifEmpty { "Не заданы (настройте на главной)" },
+                            onValueChange = {},
+                            label = { Text("VK Хеши (из главной вкладки)") },
+                            minLines = 2,
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
                     OutlinedTextField(
                         value = workersInput,
                         onValueChange = { workersInput = it.filter(Char::isDigit) },
@@ -916,20 +982,36 @@ fun ProfilesTab(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Профили",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurface,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.weight(1f)
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-
+            ) {
+                Text(
+                    text = "Профили",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 androidx.compose.material3.IconButton(
-                    onClick = { showFormatsInfoDialog = true }
+                    onClick = { showFormatsInfoDialog = true },
+                    modifier = Modifier.size(24.dp)
                 ) {
                     androidx.compose.material3.Icon(
                         imageVector = Icons.Filled.Info,
                         contentDescription = "Справка",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+
+                androidx.compose.material3.IconButton(
+                    onClick = { pingAllProfiles(profiles) }
+                ) {
+                    androidx.compose.material3.Icon(
+                        imageVector = Icons.Filled.SignalCellularAlt,
+                        contentDescription = "Проверить пинг",
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -962,6 +1044,8 @@ fun ProfilesTab(
                                 showMoreMenu = false
                             }
                         )
+                        
+
 
                         DropdownMenuItem(
                             text = { Text("Экспорт всех профилей (ZIP)") },
@@ -1015,12 +1099,10 @@ fun ProfilesTab(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(32.dp),
+                    .padding(vertical = 48.dp, horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
@@ -1139,7 +1221,8 @@ fun ProfilesTab(
             draggingList.forEachIndexed { index, profile ->
                 androidx.compose.runtime.key(profile.id) {
                     val isActive = profile.id == currentProfileId
-                    val hasIssue = profile.vkHashes.isBlank() || profile.password.isBlank()
+                    val effectiveHashes = if (profile.useGlobalHashes) globalHashes.ifEmpty { profile.vkHashes } else profile.vkHashes
+                    val hasIssue = effectiveHashes.isBlank() || profile.password.isBlank()
 
                     val dismissState = rememberDismissState(
                         confirmStateChange = { value ->
@@ -1287,14 +1370,29 @@ fun ProfilesTab(
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                 }
-                                Spacer(Modifier.height(2.dp))
-                                val profileHashCount = if (profile.vkHashes.isBlank()) 0 else profile.vkHashes.trim().split(",").count { it.isNotBlank() }
-                                Text(
-                                    text = "${obfuscatePeer(profile.peer)} · $profileHashCount хеш · ${profile.workersPerHash}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        text = obfuscatePeer(profile.peer),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                    val pingMs = pingResults[profile.id]
+                                    if (pingMs != null) {
+                                        val color = when {
+                                            pingMs < 0 -> MaterialTheme.colorScheme.error
+                                            pingMs < 700 -> androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                                            pingMs < 1000 -> androidx.compose.ui.graphics.Color(0xFFFFA000)
+                                            else -> MaterialTheme.colorScheme.error
+                                        }
+                                        Box(modifier = Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(color))
+                                        Text(
+                                            if (pingMs < 0) "Fail" else "${pingMs}ms",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = color
+                                        )
+                                    }
+                                }
 
                                 val status = deviceStatuses[profile.id]
                                 if (status != null && !status.isError && !profile.password.isBlank() && !profile.peer.isBlank()) {
@@ -1373,8 +1471,6 @@ fun ProfilesTab(
                             Spacer(Modifier.width(8.dp))
                             
                             Row(verticalAlignment = Alignment.CenterVertically) {
-
-
                                 androidx.compose.material3.FilledIconButton(
                                     onClick = { moveToGroupTarget = profile },
                                     modifier = Modifier.size(28.dp),
@@ -1432,7 +1528,7 @@ fun ProfilesTab(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 val warnings = mutableListOf<String>()
-                                if (profile.vkHashes.isBlank()) warnings.add("хеш не указан")
+                                if (effectiveHashes.isBlank()) warnings.add("хеш не указан")
                                 if (profile.password.isBlank()) warnings.add("пароль не указан")
                                 Surface(
                                     color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
@@ -1466,6 +1562,24 @@ fun ProfilesTab(
         ) {
             Icon(Icons.Filled.Add, contentDescription = "Создать профиль")
         }
+    }
+
+    val isPingingAny = pingingState.values.any { it }
+    if (isPingingAny) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Замер задержки", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Text("Выполняется проверка...\nЭто может занять до 20 секунд.", style = MaterialTheme.typography.bodyMedium)
+                }
+            },
+            confirmButton = { }
+        )
     }
 
     if (showCreateSheet) {
@@ -1609,6 +1723,32 @@ fun ProfilesTab(
 private fun parseQrConfig(rawText: String): ConnectionProfile? {
     val trimmed = rawText.trim()
     if (trimmed.isEmpty()) return null
+
+    // 0. Try legacy original WDTT scheme
+    if (trimmed.startsWith("wdtt://")) {
+        try {
+            // wdtt://<server_ip>:<dtls_port>:<wg_port>:<local_port>:<password>:<vk_hash>
+            val parts = trimmed.removePrefix("wdtt://").split(":")
+            if (parts.size >= 6) {
+                val ip = parts[0]
+                val dtlsPort = parts[1]
+                val localPort = parts[3].toIntOrNull() ?: 9000
+                val pass = parts[4]
+                val hash = parts.drop(5).joinToString(":")
+                return ConnectionProfile(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = "WDTT $ip",
+                    peer = ip,
+                    vkHashes = hash,
+                    workersPerHash = 16,
+                    listenPort = localPort,
+                    password = pass
+                )
+            }
+        } catch (e: Exception) {
+            // continue parsing if failed
+        }
+    }
 
     // 1. Try URL scheme
     if (trimmed.startsWith("qwdtt://config") || trimmed.startsWith("qwdtt:config")) {

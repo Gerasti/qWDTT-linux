@@ -115,6 +115,7 @@ func main() {
 	vkHash := flag.String("vk", "", "хеши VK-звонков (через запятую)")
 	peerAddr := flag.String("peer", "", "адрес:порт VPS сервера")
 	numW := flag.Int("n", 24, "количество воркеров (кратно 12)")
+	pingOnly := flag.Bool("ping-only", false, "запустить только замер задержки и выйти")
 
 	deviceID := flag.String("device-id", "unknown", "уникальный ID устройства")
 	connPassword := flag.String("password", "", "пароль подключения")
@@ -162,6 +163,28 @@ func main() {
 		Port:    *port,
 		Hashes:  hashes,
 		WrapKey: wrapKey,
+	}
+
+	if *pingOnly {
+		var lastErr error
+		for i, hash := range hashes {
+			user, pass, turnURLs, err := GetCreds(ctx, hash, 999)
+			if err != nil {
+				lastErr = fmt.Errorf("GetCreds hash %d: %v", i, err)
+				continue
+			}
+			creds := &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: 999}
+			rtt, err := RunPing(ctx, tp, peer, creds)
+			if err != nil {
+				lastErr = fmt.Errorf("RunPing hash %d: %v", i, err)
+				continue
+			}
+			fmt.Printf("PING_RESULT|%d\n", rtt)
+			os.Exit(0)
+		}
+		// Если все хеши провалились
+		fmt.Printf("PING_ERROR|All hashes failed. Last error: %v\n", lastErr)
+		os.Exit(1)
 	}
 
 	// Слушаем локально

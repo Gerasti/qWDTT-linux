@@ -752,8 +752,12 @@ fun DeploySecretsDialog(
         return value.toIntOrNull()?.takeIf { it in 1..65535 }?.toString() ?: fallback
     }
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = false)
+    ) {
         Surface(
+            modifier = Modifier.imePadding(),
             shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,

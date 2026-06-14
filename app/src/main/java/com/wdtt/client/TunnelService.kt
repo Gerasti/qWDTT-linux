@@ -80,14 +80,15 @@ class TunnelService : Service() {
                             connectionPassword = intent.getStringExtra("connection_password")?.takeIf { it.isNotEmpty() } ?: store.connectionPassword.first(),
                             protocol = intent.getStringExtra("protocol")?.takeIf { it.isNotEmpty() } ?: store.protocol.first(),
                             captchaMode = sanitizeCaptchaMode(intent.getStringExtra("captcha_mode")?.takeIf { it.isNotEmpty() } ?: store.captchaMode.first()),
-                            captchaSolveMethod = intent.getStringExtra("captcha_solve_method")?.takeIf { it.isNotEmpty() } ?: store.captchaSolveMethod.first()
+                            captchaSolveMethod = intent.getStringExtra("captcha_solve_method")?.takeIf { it.isNotEmpty() } ?: store.captchaSolveMethod.first(),
+                            detailedLogs = store.detailedLogs.first()
                         )
                         launch(Dispatchers.Main) {
                             if (intent.action == "START_FORCED") {
                                 TunnelManager.showBlockerWarning.value = false
-                                TunnelManager.start(this@TunnelService, params, forceStart = true)
+                                startTunnel(params, forceStart = true)
                             } else {
-                                startTunnel(params)
+                                startTunnel(params, forceStart = false)
                             }
                         }
                     } catch (e: Exception) {
@@ -138,7 +139,8 @@ class TunnelService : Service() {
                     sni = store.sni.first(),
                     connectionPassword = store.connectionPassword.first(),
                     captchaMode = sanitizeCaptchaMode(store.captchaMode.first()),
-                    captchaSolveMethod = store.captchaSolveMethod.first()
+                    captchaSolveMethod = store.captchaSolveMethod.first(),
+                    detailedLogs = store.detailedLogs.first()
                 )
                 if (params.peer.isNotEmpty() && params.vkHashes.isNotEmpty()) {
                     launch(Dispatchers.Main) {
@@ -157,7 +159,7 @@ class TunnelService : Service() {
         }
     }
 
-    private fun startTunnel(params: TunnelParams) {
+    private fun startTunnel(params: TunnelParams, forceStart: Boolean = false) {
         updateNotification("Подключение...")
         acquireWakeLock()
         acquireWifiLock()
@@ -166,7 +168,7 @@ class TunnelService : Service() {
         // Вызываем всегда — дёшево, а WebView создаётся на лету при каждом запросе капчи
         CaptchaWebViewManager.onTunnelStart(applicationContext)
 
-        TunnelManager.start(this, params)
+        TunnelManager.start(this, params, forceStart)
         startStatsUpdater()
     }
 
@@ -180,6 +182,7 @@ class TunnelService : Service() {
         releaseWakeLock()
         releaseWifiLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java).cancel(TUNNEL_NOTIFICATION_ID)
         TunnelWidgetProvider.updateWidgetState(applicationContext, false, "Нажмите для подключения")
         QuickToggleTileService.requestTileUpdate(applicationContext)
         stopSelf()
@@ -325,12 +328,11 @@ class TunnelService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             TUNNEL_NOTIFICATION_CHANNEL_ID,
-            "WDTT Туннель",
-            NotificationManager.IMPORTANCE_LOW
+            "qWDTT Туннель",
+            NotificationManager.IMPORTANCE_DEFAULT // ВАЖНО: DEFAULT, а не LOW, иначе на многих китайских прошивках иконка скрывается
         ).apply {
             description = "Уведомление о работе туннеля"
             setShowBadge(false)
-            // ВАЖНО: Разрешаем показывать на экране блокировки
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             setSound(null, null)
             enableVibration(false)
@@ -352,7 +354,7 @@ class TunnelService : Service() {
         )
 
         return NotificationCompat.Builder(this, TUNNEL_NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("WDTT")
+            .setContentTitle("qWDTT")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_connected)
             .setOngoing(true)
