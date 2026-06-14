@@ -1577,8 +1577,17 @@ fun ProfilesTab(
                 }
             }
         }
+        if (profiles.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "💡 Смахните профиль влево для удаления",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 16.dp)
+            )
+        }
     }
-                }
+}
         
     SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 92.dp))
 
