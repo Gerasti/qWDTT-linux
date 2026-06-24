@@ -1370,7 +1370,7 @@ fun ProfilesTab(
                         tonalElevation = if (isActive || hasIssue) 0.dp else null,
                         modifier = Modifier.clickable {
                             scope.launch {
-                                profilesStore.applyProfile(context = context, id = profile.id, startImmediately = false)
+                                profilesStore.applyProfile(context = context, id = profile.id)
                                 Toast.makeText(context, "Применено", Toast.LENGTH_SHORT).show()
                                 onProfileApplied()
                             }

@@ -150,6 +150,8 @@ fun SettingsTabContent(
 
     val currentProfileId by settingsStore.currentProfileId.collectAsStateWithLifecycle(initialValue = "")
     val currentProfileName by settingsStore.currentProfileName.collectAsStateWithLifecycle(initialValue = "")
+    val savedPeer by settingsStore.peer.collectAsStateWithLifecycle(initialValue = "")
+    val savedWorkers by settingsStore.workersPerHash.collectAsStateWithLifecycle(initialValue = 18)
 
     val profilesStore = remember { com.wdtt.client.ProfilesStore(context) }
     val profiles by profilesStore.profiles.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -266,6 +268,15 @@ fun SettingsTabContent(
         vkLoggedIn = VkAuthWebViewManager.hasVkSessionCookie()
     }
 
+    LaunchedEffect(currentProfileId, savedPeer, savedWorkers, savedListenPort) {
+        if (currentProfileId.isBlank()) return@LaunchedEffect
+        if (savedPeer.isNotBlank()) peerInput = savedPeer
+        portInput = savedListenPort.toString()
+        val hashesCount = combinedHashes.split(",").filter { it.isNotBlank() }.size.coerceAtLeast(1)
+        val maxW = if (vkAccountAuth) SettingsStore.VK_ACCOUNT_MAX_WORKERS.toFloat() else (hashesCount * 27).toFloat()
+        workersInput = roundToGroup(savedWorkers.toFloat(), maxW)
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -322,8 +333,10 @@ fun SettingsTabContent(
             val hashesCount = hashesList.size.coerceAtLeast(1)
             val maxW = hashesCount * 27
             val finalWorkers = workersInput.toInt().coerceIn(9, maxW)
+            val dtlsPort = if (manualPortsEnabled) serverDtlsPortInput.toIntOrNull()?.coerceIn(1, 65535) ?: 56000 else 56000
+            val peerForTunnel = PeerAddress.ensurePort(peerInput.trim(), dtlsPort)
             settingsStore.save(
-                peerInput, hashes, "",
+                peerForTunnel, hashes, "",
                 finalWorkers, "udp", savedLocalPort, sniInput, false
             )
             onSaved?.invoke()
@@ -339,8 +352,10 @@ fun SettingsTabContent(
             val hashesCount = hashesList.size.coerceAtLeast(1)
             val maxW = hashesCount * 27
             val finalWorkers = workersInput.toInt().coerceIn(9, maxW)
+            val dtlsPort = if (manualPortsEnabled) serverDtlsPortInput.toIntOrNull()?.coerceIn(1, 65535) ?: 56000 else 56000
+            val peerForTunnel = PeerAddress.ensurePort(peerInput.trim(), dtlsPort)
             settingsStore.save(
-                peerInput, combinedHashes, "",
+                peerForTunnel, combinedHashes, "",
                 finalWorkers, "udp", savedLocalPort, sniInput, false
             )
         }
@@ -417,10 +432,11 @@ fun SettingsTabContent(
         val hashesCount = hashesList.size.coerceAtLeast(1)
         val maxW = hashesCount * 27
         val finalWorkers = workersInput.toInt().coerceIn(9, maxW)
+        val peerForTunnel = PeerAddress.ensurePort(peerInput.trim(), effectiveServerDtlsPort)
         saveJob?.cancel()
         scope.launch {
             settingsStore.save(
-                peerInput, combinedHashes, "",
+                peerForTunnel, combinedHashes, "",
                 finalWorkers, "udp", effectiveLocalPort, sniInput, false
             )
             settingsStore.saveCaptchaMode(effectiveCaptchaMode)
@@ -428,7 +444,7 @@ fun SettingsTabContent(
         }
         val intent = Intent(context, TunnelService::class.java).apply {
             action = "START"
-            putExtra("peer", PeerAddress.ensurePort(peerInput, effectiveServerDtlsPort))
+            putExtra("peer", peerForTunnel)
             putExtra("vk_hashes", combinedHashes)
             putExtra("secondary_vk_hash", "")
             putExtra("workers_per_hash", finalWorkers)
@@ -1138,36 +1154,21 @@ fun SettingsTabContent(
                                 onClick = {
                                     expanded = false
                                     scope.launch {
-                                        val global = settingsStore.globalVkHashes.first()
-                                        val effectiveHashes = if (p.useGlobalHashes) global.ifEmpty { p.vkHashes } else p.vkHashes
-                                        
-                                        // Clean hashes to prevent mismatch with combinedHashes and avoid false '*'
-                                        val cleanedHashes = effectiveHashes.split(Regex("[,\\s\\n]+"))
-                                            .map { it.trim() }
-                                            .filter { it.isNotBlank() }
-                                            .distinct()
-                                            .joinToString(",")
+                                        profilesStore.applyProfile(context, p.id)
 
-                                        profilesStore.applyProfile(context, p.id, startImmediately = tunnelRunning)
-                                        
-                                        // Update state inputs in UI immediately
-                                        peerInput = p.peer
-                                        workersInput = p.workersPerHash.toFloat()
-                                        portInput = p.listenPort.toString()
-                                        
-                                        // Auto-reconnect if tunnel is already running
+                                        peerInput = settingsStore.peer.first()
+                                        portInput = settingsStore.listenPort.first().toString()
+                                        workersInput = roundToGroup(
+                                            settingsStore.workersPerHash.first().toFloat(),
+                                            dynamicMaxWorkers
+                                        )
+
                                         if (tunnelRunning) {
-                                            TunnelManager.stop()
-                                            kotlinx.coroutines.delay(500)
-                                            val captchaMode = settingsStore.captchaMode.first()
-                                            val captchaSolve = settingsStore.captchaSolveMethod.first()
-                                            val vkAuthMode = settingsStore.vkAuthMode.first()
-                                            val isDetailedLogs = settingsStore.detailedLogs.first()
-                                            val peerWithPort = PeerAddress.ensurePort(p.peer, effectiveServerDtlsPort)
-                                            val params = com.wdtt.client.TunnelParams(
-                                                peerWithPort, cleanedHashes, "", p.workersPerHash, p.listenPort, "", p.password, "udp", captchaMode, captchaSolve, vkAuthMode, isDetailedLogs
+                                            context.startService(
+                                                Intent(context, TunnelService::class.java).apply { action = "STOP" }
                                             )
-                                            TunnelManager.start(context, params, isSwitching = true)
+                                            kotlinx.coroutines.delay(800)
+                                            requestVpnAndStart()
                                         }
 
                                         Toast.makeText(context, "Профиль «${p.name}» применен!", Toast.LENGTH_SHORT).show()

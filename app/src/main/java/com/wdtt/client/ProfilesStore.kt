@@ -210,8 +210,8 @@ class ProfilesStore(context: Context) {
         }
     }
 
-    // Apply profile: save to SettingsStore and optionally start tunnel
-    suspend fun applyProfile(context: Context, id: String, startImmediately: Boolean = false) {
+    // Apply profile: save to SettingsStore
+    suspend fun applyProfile(context: Context, id: String) {
         val p = getProfileOnce(id) ?: return
         // save to settings
         val finalHashes = if (p.useGlobalHashes) {
@@ -226,13 +226,5 @@ class ProfilesStore(context: Context) {
         settings.save(peerWithPort, finalHashes, "", p.workersPerHash, "udp", p.listenPort)
         settings.saveConnectionPassword(p.password)
         settings.saveCurrentProfile(p.id, p.name)
-        if (startImmediately) {
-            val captchaMode = settings.captchaMode.first()
-            val captchaSolve = settings.captchaSolveMethod.first()
-            val vkAuthMode = settings.vkAuthMode.first()
-            val detailedLogs = settings.detailedLogs.first()
-            val params = TunnelParams(peerWithPort, finalHashes, "", p.workersPerHash, p.listenPort, "", p.password, "udp", captchaMode, captchaSolve, vkAuthMode, detailedLogs)
-            TunnelManager.start(context, params)
-        }
     }
 }
