@@ -208,8 +208,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Слушаем локально
-	localConn, err := net.ListenPacket("udp", *listen)
+	// Слушаем локально (SO_REUSEADDR — быстрый перезапуск без «address already in use»)
+	localConn, err := listenUDP(*listen)
 	if err != nil {
 		log.Fatalf("[КЛИЕНТ] Ошибка слушателя %s: %v", *listen, err)
 	}

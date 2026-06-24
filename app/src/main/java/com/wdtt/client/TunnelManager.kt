@@ -16,6 +16,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import java.io.File
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -237,6 +240,10 @@ object TunnelManager {
                     updateLog("binary_error", "Ошибка: Бинарный файл не найден", 99, true)
                     running.value = false
                     return@launch
+                }
+
+                withContext(Dispatchers.IO) {
+                    ensureTransportStopped(params.port)
                 }
 
                 val cmd = mutableListOf(
@@ -770,10 +777,13 @@ object TunnelManager {
         val params = currentParams ?: return
         val context = lastContext?.get() ?: return
         updateLog("network_restart", "[СЕТЬ] Перезапуск транспорта из-за смены сети...", 50, false)
-        killProcess() // Только убиваем процесс, running не трогаем!
         scope.launch {
-            delay(1500)
-            start(context, params, isSwitching = true)
+            withContext(Dispatchers.IO) {
+                ensureTransportStopped(params.port)
+            }
+            if (running.value) {
+                start(context, params, isSwitching = true)
+            }
         }
     }
 
@@ -796,17 +806,73 @@ object TunnelManager {
     private fun killProcess() {
         watchdogJob?.cancel()
         readerJob?.cancel()
+        stopGoProcessGracefully()
+    }
+
+    private fun stopGoProcessGracefully() {
         val proc = process
         process = null
-        if (proc != null) {
-            try { proc.destroy() } catch (_: Exception) {}
-            // Даём 500мс на graceful shutdown
-            try { proc.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
-            if (proc.isAlive) {
-                try { proc.destroyForcibly() } catch (_: Exception) {}
-                try { proc.waitFor(1000, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        if (proc == null) return
+        try {
+            proc.outputStream.write("STOP\n".toByteArray(Charsets.UTF_8))
+            proc.outputStream.flush()
+        } catch (_: Exception) {
+        }
+        try {
+            proc.waitFor(400, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+        }
+        if (proc.isAlive) {
+            try {
+                proc.destroy()
+            } catch (_: Exception) {
+            }
+            try {
+                proc.waitFor(800, TimeUnit.MILLISECONDS)
+            } catch (_: Exception) {
             }
         }
+        if (proc.isAlive) {
+            try {
+                proc.destroyForcibly()
+            } catch (_: Exception) {
+            }
+            try {
+                proc.waitFor(1500, TimeUnit.MILLISECONDS)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun canBindUdpPort(port: Int): Boolean {
+        return try {
+            DatagramSocket(null).use { socket ->
+                socket.reuseAddress = true
+                socket.bind(InetSocketAddress("127.0.0.1", port))
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun waitForUdpPortFree(port: Int, timeoutMs: Long = 6000L) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (canBindUdpPort(port)) return
+            delay(100)
+        }
+        updateLog(
+            "port_wait_warn",
+            "Порт $port занят дольше обычного, пробуем запуск…",
+            50,
+            true
+        )
+    }
+
+    private suspend fun ensureTransportStopped(port: Int) {
+        killProcess()
+        waitForUdpPortFree(port)
     }
 
     private fun saveRemainingTraffic() {
@@ -850,28 +916,19 @@ object TunnelManager {
         ManlCaptchaWebViewManager.cancelCaptcha()
     }
 
-    // Suspend-версия: гарантирует что процесс мёртв и порт свободен
+    // Suspend-версия: гарантирует что процесс мёртв и UDP-порт свободен
     suspend fun stopAndWait() {
         saveRemainingTraffic()
-        // Сначала останавливаем WireGuard и ждём завершения
+        val port = currentParams?.port ?: 9000
         withContext(Dispatchers.Main) {
             wgHelper?.stopTunnel()
         }
         withContext(Dispatchers.IO) {
-            killProcess()
+            ensureTransportStopped(port)
             running.value = false
             activeWorkers.value = 0
             currentParams = null
             ManlCaptchaWebViewManager.cancelCaptcha()
-            // Ждём освобождения порта 9000 (до 3 секунд)
-            repeat(30) {
-                try {
-                    java.net.ServerSocket(9000, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.close() }
-                    return@withContext // Порт свободен!
-                } catch (_: Exception) {
-                    delay(100)
-                }
-            }
         }
     }
 
