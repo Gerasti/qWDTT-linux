@@ -283,6 +283,12 @@ fun SettingsTabContent(
         }
     }
 
+    LaunchedEffect(vkAccountAuth) {
+        if (vkAccountAuth) {
+            vkLoggedIn = VkAuthWebViewManager.hasVkSessionCookie()
+        }
+    }
+
     LaunchedEffect(savedManualPortsEnabled) {
         manualPortsEnabled = savedManualPortsEnabled
     }
@@ -1364,6 +1370,27 @@ fun SettingsTabContent(
                                 "Вход в VK выполнен",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFF43A047),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                "Вход в VK не выполнен",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
                                 fontWeight = FontWeight.Medium
                             )
                         }

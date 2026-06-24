@@ -103,6 +103,11 @@ object TunnelManager {
         updateLog("deploy_ok_$hash", message, 2, false)
     }
 
+    fun addVkAuthLog(message: String, isError: Boolean = false) {
+        val key = "vk_auth_dbg_${message.hashCode()}_${System.nanoTime()}"
+        updateLog(key, "[VK Auth] $message", 5, isError)
+    }
+
     private fun updateLog(key: String, message: String, priority: Int, isError: Boolean = false) {
         if (isError) {
             val list = logs.value
@@ -258,7 +263,7 @@ object TunnelManager {
 
                 if (!params.vkAuthMode.equals("anonymous", ignoreCase = true)) {
                     try {
-                        updateLog("vk_auth_start", "VK: нажмите «Продолжить» в браузере", 0, false)
+                        updateLog("vk_auth_start", "VK: подтверждаем вход в звонок…", 0, false)
                         val credsByHash = VkAuthWebViewManager.authenticateAll(appContext, hashList)
                         val credsFile = VkAuthWebViewManager.writeCredsFile(appContext, credsByHash)
                         cmd.add("-vk-creds-file")

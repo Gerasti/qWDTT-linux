@@ -53,12 +53,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -277,7 +284,7 @@ object VkAuthWebViewManager {
         )
         val body = when (mode) {
             VkAuthScreenMode.LOGIN -> "Войдите в аккаунт VK"
-            VkAuthScreenMode.JOIN_CALL -> "Нажмите «Продолжить» в браузере"
+            VkAuthScreenMode.JOIN_CALL -> "Подтверждаем вход в звонок…"
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -304,6 +311,11 @@ object VkAuthWebViewManager {
         val b64 = Base64.encodeToString(json.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         return "TURN_CREDS|$hash|$b64\n"
     }
+
+    internal fun logAuth(message: String, isError: Boolean = false) {
+        Log.d(TAG, message)
+        TunnelManager.addVkAuthLog(message, isError)
+    }
 }
 
 class VkAuthActivity : ComponentActivity() {
@@ -314,6 +326,9 @@ class VkAuthActivity : ComponentActivity() {
     private var awaitingLoginBeforeJoin = false
     private var join404Retries = 0
     private var webViewRef: WebView? = null
+    private val autoJoinScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var autoJoinJob: Job? = null
+    private var autoJoinRunId = 0
 
     private fun joinUrlCandidates(): List<String> = listOf(
         "https://m.vk.com/call/join/$joinHash",
@@ -373,6 +388,246 @@ class VkAuthActivity : ComponentActivity() {
         })();
     """.trimIndent()
 
+    private val autoJoinDiagJSCode = """
+        (function() {
+            function norm(s) {
+                return (s || '').replace(/\s+/g, ' ').trim();
+            }
+            var buttons = [];
+            var selectors = 'button, a, [role="button"], input[type="button"], input[type="submit"], .vkuiButton, [class*="Button"]';
+            var nodes = document.querySelectorAll(selectors);
+            for (var i = 0; i < nodes.length && buttons.length < 20; i++) {
+                var el = nodes[i];
+                var text = norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label'));
+                if (!text) continue;
+                buttons.push(text.substring(0, 100));
+            }
+            var body = '';
+            try { body = norm((document.body && document.body.innerText) || '').substring(0, 400); } catch(e) {}
+            return JSON.stringify({
+                url: String(location.href || ''),
+                ready: String(document.readyState || ''),
+                title: String(document.title || ''),
+                clicks: window.__wdtt_auto_join_clicks || 0,
+                buttons: buttons,
+                body: body
+            });
+        })();
+    """.trimIndent()
+
+    private val autoJoinSetupJSCode = """
+        (function() {
+            if (window.__wdtt_auto_join_ready) return;
+            window.__wdtt_auto_join_ready = true;
+            window.__wdtt_auto_join_clicks = 0;
+            window.__wdtt_auto_join_done = false;
+
+            var rejectPhrases = [
+                'открыть в приложении',
+                'open in app',
+                'open in the',
+                'vk звонки',
+                'скачать приложение'
+            ];
+
+            function norm(s) {
+                return (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            }
+
+            function elementText(el) {
+                return norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '');
+            }
+
+            function scoreElement(el) {
+                var text = elementText(el);
+                if (!text || text.length > 120) return -1;
+                for (var r = 0; r < rejectPhrases.length; r++) {
+                    if (text.indexOf(rejectPhrases[r]) !== -1) return -1;
+                }
+                if (text.indexOf('продолжить в браузере') !== -1 && text.indexOf('открыть') !== -1 && text.length > 30) {
+                    return -1;
+                }
+                if (text === 'продолжить в браузере' || text === 'continue in browser') return 100;
+                if (text.indexOf('продолжить в браузере') !== -1) return 90 - Math.min(text.length, 80);
+                if (text.indexOf('continue in browser') !== -1) return 85 - Math.min(text.length, 80);
+                if (text.indexOf('присоединиться к звонку через браузер') !== -1) return 70;
+                if (text.indexOf('присоединиться через браузер') !== -1) return 65;
+                if (text.indexOf('войти в звонок') !== -1) return 50;
+                if (text === 'продолжить' || text === 'continue') return 40;
+                if (text.indexOf('продолжить') !== -1 && text.length <= 25) return 35;
+                return -1;
+            }
+
+            function hasBetterChild(el, parentScore) {
+                var kids = el.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]');
+                for (var i = 0; i < kids.length; i++) {
+                    if (kids[i] === el) continue;
+                    var cs = scoreElement(kids[i]);
+                    if (cs >= parentScore) return true;
+                }
+                return false;
+            }
+
+            function pickBest(minScore) {
+                var selectors = 'button, a, [role="button"], input[type="button"], input[type="submit"], .vkuiButton, [class*="Button"]';
+                var nodes = document.querySelectorAll(selectors);
+                var best = null;
+                var bestScore = -1;
+                var bestLen = 9999;
+                for (var i = 0; i < nodes.length; i++) {
+                    var el = nodes[i];
+                    var sc = scoreElement(el);
+                    if (sc < minScore) continue;
+                    if (hasBetterChild(el, sc)) continue;
+                    var tlen = elementText(el).length;
+                    if (sc > bestScore || (sc === bestScore && tlen < bestLen)) {
+                        best = el;
+                        bestScore = sc;
+                        bestLen = tlen;
+                    }
+                }
+                return best ? { el: best, score: bestScore, text: elementText(best) } : null;
+            }
+
+            function fireClick(el) {
+                try { el.click(); } catch (e1) {}
+                try {
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                } catch (e2) {}
+            }
+
+            window.__wdtt_autoJoinTry = function() {
+                if (window.__wdtt_auto_join_done) return '';
+                var pick = pickBest(50) || pickBest(35);
+                if (!pick) return '';
+                fireClick(pick.el);
+                window.__wdtt_auto_join_clicks = (window.__wdtt_auto_join_clicks || 0) + 1;
+                window.__wdtt_auto_join_done = true;
+                return 'clicked(score=' + pick.score + '):' + pick.text.substring(0, 60);
+            };
+
+            if (!window.__wdtt_auto_join_observer) {
+                window.__wdtt_auto_join_observer = new MutationObserver(function() {
+                    window.__wdtt_autoJoinTry();
+                });
+                var root = document.documentElement || document.body;
+                if (root) {
+                    window.__wdtt_auto_join_observer.observe(root, { childList: true, subtree: true });
+                }
+                setTimeout(function() {
+                    try { window.__wdtt_auto_join_observer.disconnect(); } catch(e) {}
+                }, 45000);
+            }
+        })();
+    """.trimIndent()
+
+    private val autoJoinTryJSCode =
+        "(function(){ return (window.__wdtt_autoJoinTry && window.__wdtt_autoJoinTry()) || ''; })();"
+
+    private fun resetAutoJoinForNewPage(view: WebView?) {
+        autoJoinJob?.cancel()
+        autoJoinRunId++
+        view?.evaluateJavascript(
+            "window.__wdtt_auto_join_clicks=0; window.__wdtt_auto_join_ready=false; window.__wdtt_auto_join_done=false;",
+            null
+        )
+        VkAuthWebViewManager.logAuth("Страница загружается, сброс автоклика")
+    }
+
+    private fun parseJsJson(raw: String?): JSONObject? {
+        if (raw.isNullOrBlank() || raw == "null") return null
+        var s = raw.trim()
+        if (s.startsWith("\"") && s.endsWith("\"")) {
+            s = s.substring(1, s.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        }
+        return try {
+            JSONObject(s)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun dumpPageDiagnostics(view: WebView?, reason: String) {
+        view?.evaluateJavascript(autoJoinDiagJSCode) { raw ->
+            val obj = parseJsJson(raw)
+            if (obj == null) {
+                VkAuthWebViewManager.logAuth("Диагностика ($reason): не удалось прочитать страницу")
+                return@evaluateJavascript
+            }
+            try {
+                val url = obj.optString("url")
+                val ready = obj.optString("ready")
+                val title = obj.optString("title")
+                val clicks = obj.optInt("clicks")
+                val buttons = obj.optJSONArray("buttons")
+                val body = obj.optString("body")
+                val btnList = buildList {
+                    if (buttons != null) {
+                        for (i in 0 until buttons.length()) {
+                            val t = buttons.optString(i)
+                            if (t.isNotBlank()) add(t)
+                        }
+                    }
+                }
+                VkAuthWebViewManager.logAuth(
+                    "Диагностика ($reason): ready=$ready, url=${url.take(80)}, title=${title.take(60)}, clicks=$clicks"
+                )
+                if (btnList.isEmpty()) {
+                    VkAuthWebViewManager.logAuth("Кнопки на странице: не найдены")
+                } else {
+                    VkAuthWebViewManager.logAuth("Кнопки (${btnList.size}): ${btnList.take(8).joinToString(" | ")}")
+                }
+                if (body.isNotBlank()) {
+                    VkAuthWebViewManager.logAuth("Текст страницы: ${body.take(200)}")
+                }
+            } catch (e: Exception) {
+                VkAuthWebViewManager.logAuth("Диагностика ($reason): ошибка ${e.message}")
+            }
+        }
+    }
+
+    private fun scheduleAutoJoinClicks(view: WebView?) {
+        if (screenMode != VkAuthScreenMode.JOIN_CALL || awaitingLoginBeforeJoin) return
+        val wv = view ?: return
+        val runId = ++autoJoinRunId
+        autoJoinJob?.cancel()
+        val clicked = AtomicBoolean(false)
+        VkAuthWebViewManager.logAuth("Автоклик: старт (run=$runId, hash=${joinHash.take(8)}…)")
+        wv.evaluateJavascript(autoJoinSetupJSCode, null)
+        val delaysMs = longArrayOf(0, 500, 1000, 2000, 3000, 4000, 5000, 6500, 8000, 10000, 12000, 15000, 18000)
+        val diagAtMs = setOf(3000L, 5000L, 8000L, 12000L, 18000L)
+        autoJoinJob = autoJoinScope.launch {
+            var prev = 0L
+            for (target in delaysMs) {
+                delay(target - prev)
+                prev = target
+                if (runId != autoJoinRunId) {
+                    VkAuthWebViewManager.logAuth("Автоклик: отменён (новая страница)")
+                    return@launch
+                }
+                wv.evaluateJavascript(autoJoinTryJSCode) { result ->
+                    val clean = result?.trim()?.removeSurrounding("\"").orEmpty()
+                    when {
+                        clean.isNotBlank() && clean != "null" -> {
+                            clicked.set(true)
+                            VkAuthWebViewManager.logAuth("Автоклик @${target}ms: $clean")
+                        }
+                        diagAtMs.contains(target) && !clicked.get() -> dumpPageDiagnostics(wv, "${target}ms")
+                    }
+                }
+            }
+            delay(500)
+            if (runId == autoJoinRunId && !clicked.get()) {
+                VkAuthWebViewManager.logAuth(
+                    "Автоклик: кнопка не найдена за 18с — нажмите «Продолжить» вручную",
+                    isError = true
+                )
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -401,11 +656,14 @@ class VkAuthActivity : ComponentActivity() {
             VkAuthScreenMode.LOGIN -> "Войдите в аккаунт VK"
             VkAuthScreenMode.JOIN_CALL -> when {
                 awaitingLoginBeforeJoin -> "Сначала войдите в аккаунт VK"
-                else -> "Нажмите «Продолжить» в браузере"
+                else -> "Подтверждаем вход в звонок…"
             }
         }
 
         CookieManager.getInstance().setAcceptCookie(true)
+        VkAuthWebViewManager.logAuth(
+            "WebView: mode=$screenMode, url=$startUrl, vkCookie=${VkAuthWebViewManager.hasVkSessionCookie()}, awaitingLogin=$awaitingLoginBeforeJoin"
+        )
 
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
@@ -469,6 +727,11 @@ class VkAuthActivity : ComponentActivity() {
 
                                         addJavascriptInterface(object {
                                             @JavascriptInterface
+                                            fun onDebugLog(message: String) {
+                                                VkAuthWebViewManager.logAuth("JS: $message")
+                                            }
+
+                                            @JavascriptInterface
                                             fun onTurnServer(json: String) {
                                                 if (screenMode != VkAuthScreenMode.JOIN_CALL) return
                                                 runOnUiThread {
@@ -494,6 +757,7 @@ class VkAuthActivity : ComponentActivity() {
                                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                                 super.onPageStarted(view, url, favicon)
                                                 if (screenMode == VkAuthScreenMode.JOIN_CALL) {
+                                                    resetAutoJoinForNewPage(view)
                                                     view?.evaluateJavascript(interceptorJSCode, null)
                                                 }
                                             }
@@ -503,6 +767,7 @@ class VkAuthActivity : ComponentActivity() {
                                                 if (screenMode == VkAuthScreenMode.JOIN_CALL) {
                                                     view?.evaluateJavascript(interceptorJSCode, null)
                                                     checkJoinPageOrRetry(view, url)
+                                                    scheduleAutoJoinClicks(view)
                                                 }
                                                 if (screenMode == VkAuthScreenMode.LOGIN) {
                                                     checkLoginAndClose(url)
@@ -566,7 +831,7 @@ class VkAuthActivity : ComponentActivity() {
         awaitingLoginBeforeJoin = false
         joinUrlIndex = 0
         join404Retries = 0
-        Log.d("VkAuthWV", "VK login before join OK, opening call link")
+        VkAuthWebViewManager.logAuth("Вход VK OK, открываем звонок: ${currentJoinUrl()}")
         view?.loadUrl(currentJoinUrl())
     }
 
@@ -580,12 +845,13 @@ class VkAuthActivity : ComponentActivity() {
             if (joinUrlIndex < candidates.lastIndex) {
                 joinUrlIndex++
                 join404Retries++
-                Log.w("VkAuthWV", "VK 404 on ${pageUrl ?: "?"}, retry ${joinUrlIndex + 1}/${candidates.size}")
+                VkAuthWebViewManager.logAuth("404 на ${pageUrl ?: "?"}, retry ${joinUrlIndex + 1}/${candidates.size}")
                 runOnUiThread { view.loadUrl(currentJoinUrl()) }
                 return@evaluateJavascript
             }
             if (join404Retries == 0) return@evaluateJavascript
             Log.e("VkAuthWV", "VK call link not found for hash ${joinHash.take(8)}...")
+            VkAuthWebViewManager.logAuth("Хеш звонка недействителен: ${joinHash.take(8)}…", isError = true)
             VkAuthWebViewManager.notifyTurnResult(
                 Result.failure(
                     Exception("Ссылка на звонок VK недействительна или устарела. Обновите хеш звонка.")
@@ -605,7 +871,7 @@ class VkAuthActivity : ComponentActivity() {
         if (onLoginFlow) return
 
         loginHandled = true
-        Log.d("VkAuthWV", "VK login detected, closing WebView")
+        VkAuthWebViewManager.logAuth("Вход VK выполнен, закрываем WebView")
         VkAuthWebViewManager.notifyLoginSuccess()
         finish()
     }
@@ -622,10 +888,10 @@ class VkAuthActivity : ComponentActivity() {
                 if (url.isNotBlank()) urls.add(url)
             }
             if (user.isBlank() || pass.isBlank() || urls.isEmpty()) {
-                Log.e("VkAuthWV", "Incomplete turn_server: $json")
+                VkAuthWebViewManager.logAuth("Неполный turn_server: $json", isError = true)
                 return
             }
-            Log.d("VkAuthWV", "TURN creds captured, urls=${urls.size}")
+            VkAuthWebViewManager.logAuth("TURN получены, urls=${urls.size}")
             VkAuthWebViewManager.notifyTurnResult(Result.success(VkTurnCreds(user, pass, urls)))
             finish()
         } catch (e: Exception) {
@@ -634,6 +900,7 @@ class VkAuthActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        autoJoinJob?.cancel()
         super.onDestroy()
         if (VkAuthWebViewManager.activeActivity === this) {
             VkAuthWebViewManager.activeActivity = null

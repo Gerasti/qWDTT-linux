@@ -70,7 +70,8 @@ type ClientDevice struct {
 }
 
 type PasswordEntry struct {
-	DeviceID      string   `json:"device_id"`   // Для обратной совместимости, если нужно
+	Label         string   `json:"label,omitempty"` // понятное имя в боте
+	DeviceID      string   `json:"device_id"`       // Для обратной совместимости, если нужно
 	DeviceIDs     []string `json:"device_ids"`  // Список привязанных deviceID
 	MaxDevices    int      `json:"max_devices"` // Максимальное кол-во устройств (0 или 1 = 1 устройство)
 	ExpiresAt     int64    `json:"expires_at"`  // unix timestamp
@@ -169,6 +170,22 @@ func generatePassword() string {
 		b[i] = passChars[int(raw)%len(passChars)]
 	}
 	return string(b)
+}
+
+func passwordEntryLabel(entry *PasswordEntry, pass string, index int) string {
+	if entry != nil {
+		if label := strings.TrimSpace(entry.Label); label != "" {
+			return label
+		}
+	}
+	if len(pass) >= 4 {
+		return fmt.Sprintf("Доступ …%s", pass[len(pass)-4:])
+	}
+	return fmt.Sprintf("Доступ #%d", index)
+}
+
+func nextPasswordLabel() string {
+	return fmt.Sprintf("Доступ %d", len(db.Passwords)+1)
 }
 
 var publicIP string = ""
@@ -552,7 +569,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 						sendTelegram(token, adminID, "❌ Пароль не найден", nil)
 						continue
 					}
-					txt := fmt.Sprintf("🔑 *Пароль:* `%s`\n", pass)
+					txt := fmt.Sprintf("👤 *Имя:* %s\n🔑 *Пароль:* `%s`\n", passwordEntryLabel(entry, pass, 0), pass)
 					if entry.VkHash != "" {
 						ports := entry.Ports
 						if ports == "" {
@@ -964,7 +981,9 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					continue
 				}
 				expiresAt := time.Now().Add(time.Duration(tempDays) * 24 * time.Hour).Unix()
+				newLabel := nextPasswordLabel()
 				db.Passwords[newPass] = &PasswordEntry{
+					Label:      newLabel,
 					ExpiresAt:  expiresAt,
 					MaxDevices: tempMaxDevs,
 					VkHash:     hash,
@@ -978,23 +997,23 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 				pts := strings.Split(tempPorts, ",")
 				link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], newPass, hash)
 
-				nameEsc := neturl.QueryEscape(fmt.Sprintf("qWDTT - %s", srvIP))
+				nameEsc := neturl.QueryEscape(newLabel)
 				peerEsc := neturl.QueryEscape(srvIP)
 				hashesEsc := neturl.QueryEscape(hash)
 				passEsc := neturl.QueryEscape(newPass)
 				qwdttLink := fmt.Sprintf("qwdtt://config?name=%s&peer=%s&hashes=%s&workers=16&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
 
-				msgText := fmt.Sprintf("🔑 Новый пароль:\n`%s`\n\n⏰ Действует %d дн. (до %s)\n📱 Лимит: %d устройств\nОжидает первого подключения\n\n🔗 *Быстрая ссылка qWDTT:* `%s`\n\n🔗 *Legacy ссылка:* `%s`", newPass, tempDays, expDate, tempMaxDevs, qwdttLink, link)
+				msgText := fmt.Sprintf("👤 Имя: *%s*\n🔑 Новый пароль:\n`%s`\n\n⏰ Действует %d дн. (до %s)\n📱 Лимит: %d устройств\nОжидает первого подключения\n\n🔗 *Быстрая ссылка qWDTT:* `%s`\n\n🔗 *Legacy ссылка:* `%s`", newLabel, newPass, tempDays, expDate, tempMaxDevs, qwdttLink, link)
 				sendTelegram(token, adminID, msgText, nil)
 
 				configJSON := fmt.Sprintf(`{
-  "name": "qWDTT - %s",
+  "name": "%s",
   "peer": "%s",
   "vkHashes": "%s",
   "workersPerHash": 16,
   "listenPort": 9000,
   "password": "%s"
-}`, srvIP, srvIP, hash, newPass)
+}`, newLabel, srvIP, hash, newPass)
 				fileName := fmt.Sprintf("qwdtt_%s.conf", newPass)
 				sendTelegramFile(token, adminID, fileName, []byte(configJSON))
 				continue
@@ -1145,9 +1164,12 @@ func sendPasswordList(token string, adminID int64, wgDev *device.Device) {
 		txt += "_Нет сгенерированных паролей._\n"
 	} else {
 		txt += fmt.Sprintf("_Активно: %d/%d_\n\n", len(db.Passwords), maxGeneratedPasswords)
+		index := 0
 		for p, entry := range db.Passwords {
+			index++
+			label := passwordEntryLabel(entry, p, index)
 			status := "🟢"
-			if entry.DeviceID != "" {
+			if entry.DeviceID != "" || len(entry.DeviceIDs) > 0 {
 				status = "🔗"
 			}
 			expiry := "♾"
@@ -1159,9 +1181,9 @@ func sendPasswordList(token string, adminID int64, wgDev *device.Device) {
 					expiry = "❌"
 				}
 			}
-			txt += fmt.Sprintf("%s `%s` (%s)\n", status, p, expiry)
+			txt += fmt.Sprintf("%s *%s* (%s)\n", status, label, expiry)
 			inlineKb = append(inlineKb, map[string]interface{}{
-				"text":          "🔍 " + p,
+				"text":          "🔍 " + label,
 				"callback_data": "viewpass_" + p,
 			})
 		}

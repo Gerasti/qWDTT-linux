@@ -7,15 +7,15 @@ plugins {
 }
 
 android {
-    namespace = "com.wdtt.client"
+    namespace = "com.wdtt.client"   
     compileSdk = 35
     
     defaultConfig {
         applicationId = "net.qwdtt.client"
         minSdk = 29
         targetSdk = 35
-        versionCode = 18
-        versionName = "1.2.1"
+        versionCode = 19
+        versionName = "1.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
