@@ -291,6 +291,10 @@ func fetchVkCreds(ctx context.Context, link string, streamID int) (string, strin
 
 func getTokenChain(ctx context.Context, link string, streamID int, creds VKCredentials, jar tlsclient.CookieJar) (string, string, []string, error) {
 	profile := getRandomProfile()
+	if saved, err := LoadProfileFromDisk(); err == nil && saved != nil && strings.TrimSpace(saved.UserAgent) != "" {
+		profile = saved.Profile
+		log.Printf("[STREAM %d] [VK Auth] Используем профиль устройства из vk_profile.json", streamID)
+	}
 
 	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
 		tlsclient.WithTimeoutSeconds(20),
@@ -513,6 +517,10 @@ func solveCaptchaBySelectedMode(
 		if ctx.Err() != nil {
 			return "", solveErr
 		}
+		if isCaptchaSessionExhausted(solveErr) {
+			log.Printf("[STREAM %d] [КАПЧА] RJS: сессия капчи исчерпана, открываем WebView", streamID)
+			return requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout)
+		}
 		log.Printf("[STREAM %d] [КАПЧА] RJS: ошибка, fallback на WBV Auto: %v", streamID, solveErr)
 		return requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout)
 	}
@@ -528,6 +536,14 @@ func solveCaptchaBySelectedMode(
 		return "", solveErr
 	}
 	lastErr := solveErr
+	if isCaptchaSessionExhausted(solveErr) {
+		log.Printf("[STREAM %d] [КАПЧА] AUTO: сессия капчи исчерпана, сразу ручной WebView", streamID)
+		token, solveErr = requestWebViewCaptcha(streamID, captchaErr, "manual", captchaManualWebViewTimeout)
+		if solveErr == nil {
+			return token, nil
+		}
+		return "", solveErr
+	}
 	log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 не решил за 2 попытки: %v", streamID, solveErr)
 
 	for wbvAttempt := 1; wbvAttempt <= 2; wbvAttempt++ {

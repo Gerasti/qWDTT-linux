@@ -244,6 +244,7 @@ object TunnelManager {
 
                 withContext(Dispatchers.IO) {
                     ensureTransportStopped(params.port)
+                    VkCaptchaProfile.writeForGo(appContext)
                 }
 
                 val cmd = mutableListOf(
