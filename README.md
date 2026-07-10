@@ -1,235 +1,205 @@
-# qWDTT
+# qWDTT CLI
 
-Android-клиент для VPN-туннеля WireGuard, который ходит до вашего VPS через TURN relay VK — снаружи это выглядит как зашифрованный медиапоток звонка WebRTC, а не как классический VPN.
+CLI версия VPN клиента Linux через TURN-серверы VK с поддержкой WireGuard. Легко подключается в скрипты и мало весит.
 
-**Пакет:** `net.qwdtt.client` · **Версия:** 1.2.5
+## Возможности
 
-Совместим с сервером и протоколом **WDTT** (оригинал: [amurcanov/proxy-turn-vk-android](https://github.com/amurcanov/proxy-turn-vk-android)). Сервер `wdtt-server`, ссылки `wdtt://`, WRAP/RTP и анонимный VK-auth работают так же — можно поднять VPS оригинальным деплоем и подключиться qWDTT.
+- Подключение к VPN через TURN-серверы VK
+- Управление профилями (добавление, редактирование, удаление)
+- Kernel WireGuard без sudo (через capabilities)
+- Split-routing (0.0.0.0/1 + 128.0.0.0/1)
+- Автоматическое исключение TURN-серверов из VPN маршрутов
 
----
+## Установка
 
-## qWDTT и базовый WDTT — в чём разница
+### NixOS Module
 
-Клиент qWDTT и базовый WDTT используют **один и тот же протокол**. Серверные части **полностью совместимы**: `wdtt-server` с деплоя оригинала или qWDTT, пароли, `wdtt://`, WRAP/RTP, Telegram-бот — всё работает взаимозаменяемо. Меняется в основном Android-клиент (UI и удобство).
+Автоматически настраивает capabilities и kernel module
 
-**Есть в qWDTT, чего нет в базовом WDTT:**
+**Пример конфигурации (`/etc/nixos/qwdtt-cli.nix`):**
 
-| Функция | qWDTT | Базовый WDTT |
-|---------|:-----:|:------------:|
-| **Профили** — несколько конфигов, папки, перетаскивание, быстрый выбор на «Туннеле» | да | нет (одна настройка на вкладке) |
-| **Импорт** `qwdtt://`, файл `.qwdtt`, пакетный JSON, QR на экспорт | да | только `wdtt://` и ручной ввод |
-| **Глобальные VK-хеши** — один пул хешей для нескольких профилей | да | нет |
-| **Пинг** до сервера по профилю, сортировка по задержке | да | нет |
-| **Подписки** — профили по HTTPS JSON, автообновление, трафик на карточке | да | нет |
-| **Статус пароля** в карточке профиля | да | нет |
-| **VK account auth** — вход в аккаунт VK, перехват TURN из WebView | да | только анонимный API |
-| **Виджет** на рабочем столе (вкл/выкл туннеля) | да | нет |
-| **Плитка** в шторке Quick Settings | да | нет |
-| **Плавающая панель** темы/палитры | да | нет |
-
----
-
-## Зачем это нужно
-
-Для **обхода белых списков** на сетях мобильных операторов: трафик идёт через VK TURN и выглядит как звонок WebRTC, а не как обычный VPN или прокси.
-
-qWDTT использует **инфраструктуру VK-звонков** как транспорт:
-
-- клиент получает временные **TURN**-учётные данные из VK-звонка;
-- поднимает **DTLS** через TURN relay;
-- снаружи пакеты обёрнуты в **RTP** и шифруются **WRAP** (ChaCha20-Poly1305), чтобы DPI видел поток, похожий на OPUS-аудио WebRTC;
-- на телефоне — системный **WireGuard** (`VpnService` + GoBackend), на VPS — `wdtt-server`.
-
-```
-Телефон                    VK TURN relay                 VPS
-┌──────────────┐  RTP+WRAP   ┌──────────┐  RTP+WRAP+DTLS  ┌─────────────┐
-│ WireGuard    │ ──/DTLS───► │  relay   │ ───────────────►│ wdtt-server │
-│ Go-клиент    │             │  (VK)    │                 │ WireGuard   │
-│ 127.0.0.1    │             └──────────┘                 └─────────────┘
-└──────────────┘
-```
-
-## Что умеет приложение
-
-| Раздел | Кратко |
-|--------|--------|
-| **Профили** | Несколько конфигов, группы, **подписки по JSON**, импорт/экспорт, QR, файл `.qwdtt` |
-| **Импорт ссылок** | Официальные `wdtt://` **и** расширенные `qwdtt://config?…` |
-| **Туннель** | Подключение, логи, статистика, пинг до peer |
-| **Настройки** | Потоки, DNS, капча, режим VK, исключения приложений (ЧС/БС) |
-| **Деплой** | Установка `wdtt-server` на VPS по SSH с телефона |
-| **Фон** | Foreground service, виджет, плитка в шторке, watchdog при смене сети |
-
-### VK: два режима получения TURN
-
-- **Анонимный** (по умолчанию) — Go-клиент ходит в VK API (`client_id` 6287487 / 8202606), при капче — цепочка авто-решателей + WebView.
-- **Через аккаунт VK** — вход в WebView один раз; при подключении открывается страница звонка, перехватывается `turn_server`. Лимит **~4 потока** на хеш. TURN-креды кэшируются **~9 мин**, затем обновляются автоматически.
-
-Кука VK (`remixsid`) живёт долго (решает VK). TURN login/password — короткоживущие, это нормально.
-
----
-
-## Форматы конфигурации
-
-### Официальная ссылка WDTT (`wdtt://`)
-
-Поддерживается **полностью** — импорт из QR, буфера обмена, Telegram-бота сервера, как в оригинальном WDTT.
-
-```text
-wdtt://<IP_сервера>:<dtls_port>:<wg_port>:<local_port>:<пароль>:<vk_hash>
-```
-
-**Пример:**
-
-```text
-wdtt://203.0.113.10:56000:56001:9000:MySecretPass16:8UkewARpV0aJoWheFZlR942el6unTZvhneulo-eU8gA
-```
-
-| Поле | По умолчанию | Описание |
-|------|--------------|----------|
-| `dtls_port` | `56000` | UDP-порт DTLS на VPS |
-| `wg_port` | `56001` | внутренний WireGuard-порт сервера |
-| `local_port` | `9000` | локальный UDP на Android |
-| `пароль` | — | пароль подключения (WRAP + авторизация на сервере) |
-| `vk_hash` | — | хеш звонка; если в хеше есть `:`, всё после 5-го поля склеивается |
-
-При импорте `wdtt://` потоки выставляются в **16** (как в оригинале), peer = `IP:dtls_port`.
-
-Бот на сервере при `/list` и `/new` отдаёт такие ссылки; qWDTT их понимает без конвертации.
-
-### Расширенная ссылка qWDTT (`qwdtt://`)
-
-Удобнее для профилей: имя, несколько хешей, настраиваемые потоки.
-
-```text
-qwdtt://config?name=Дом&peer=1.2.3.4:56000&hashes=хеш1,хеш2&workers=18&port=9000&pass=секрет
-```
-
-Дополнительно: `dtls_port` / `server_port` если peer без порта.
-
-### JSON и файл `.qwdtt`
-
-```json
+```nix
+{ config, lib, pkgs, ... }:
+let
+qwdtt-cli = builtins.getFlake "/etc/qWDTT-linux"; 
+# either with internet https://github.com/Gerasti/qWDTT-linux
+in
 {
-  "name": "Дом",
-  "peer": "1.2.3.4:56000",
-  "hashes": "хеш1,хеш2",
-  "workers": 18,
-  "port": 9000,
-  "password": "секрет"
+  imports =
+  [
+    qwdtt-cli.nixosModules.qwdtt-cli
+  ];
+  services.qwdtt-cli = {
+    enable = true;
+    useVendor = true;  # if false, Go modules will be downloaded from network during build
+    # package = pkgs.qwdtt-cli;  # override package if needed
+    deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
+    wrappers = {
+      enable = true;  # create security wrappers with capabilities (allows running without sudo)
+      # group = "users";  # group that can execute wrapped binaries
+    };
+  };
 }
 ```
 
-Альтернативные ключи: `vkHashes`, `workersPerHash`, `listenPort`, `pass`.  
-В QR можно передать сырой JSON или Base64. Файл `.qwdtt` — URI или JSON внутри.
+Модуль автоматически:
+- Установит `qwdtt-cli`, `wireguard-tools`, `iproute2`
+- Создаст security wrappers с capabilities для работы без sudo
+- Загрузит kernel module `wireguard`
 
-### Подписки (HTTPS JSON)
-
-Профили можно раздавать с вашего сервера одним JSON-файлом. Приложение периодически или по кнопке **Обновить** подтягивает список и **заменяет** все профили в папке подписки.
-
-**В приложении:** вкладка **Профили** → **+** → **Подписка** (нужен только адрес JSON; название берётся из `subscriptionName`).
-
-**Карточка подписки** на вкладке «Профили»: описание, трафик, кнопки обновить/удалить. Нажатие на карточку открывает папку с профилями. В папку подписки **нельзя** вручную добавлять или импортировать профили — только через обновление подписки.
-
-#### Структура JSON
-
-```json
-{
-  "subscriptionName": "DarkBit VPN",
-  "description": "Подписка · до 24.08.2026",
-  "trafficUsedMb": 76.8,
-  "trafficLimitMb": 102912,
-  "updatedAt": "2026-06-28",
-  "version": 1,
-  "profiles": [
-    {
-      "name": "Сервер 1",
-      "peer": "203.0.113.10:56000",
-      "hashes": "vk_hash_1,vk_hash_2",
-      "workers": 18,
-      "port": 9000,
-      "password": "секрет"
-    }
-  ]
-}
+Примените конфигурацию:
+```bash
+sudo nixos-rebuild switch
 ```
 
-| Поле | Обязательно | Описание |
-|------|:-----------:|----------|
-| `subscriptionName` | да | Название подписки и папки профилей |
-| `profiles` | да | Массив профилей (см. формат JSON выше) |
-| `description` | нет | Текст на карточке подписки |
-| `trafficUsedMb` | нет | Использованный трафик (МБ), для прогресс-бара |
-| `trafficLimitMb` | нет | Лимит трафика (МБ) |
-| `updatedAt` | нет | Метка времени на стороне сервера (строка) |
-| `version` | нет | Версия набора профилей (число, пока не используется в UI) |
+После установки `qwdtt-cli` доступен через `/run/wrappers/bin/qwdtt-cli`, `qwdtt-cli`.
 
-**Альтернативные ключи:** `groupName` вместо `subscriptionName`; массив `servers` вместо `profiles`; в профиле — `vkHashes`, `workersPerHash`, `listenPort`, `pass`.
-
-**Требования к адресу:** только `http://` или `https://`. Ответ — JSON (или Base64 с JSON внутри).
-
-**Экспорт группы** (⋮ → Управление папками → экспорт) формирует совместимый JSON с `subscriptionName` и `profiles[]` — его можно положить на HTTPS и выдать пользователям как подписку.
-
----
-
-## Быстрый старт
-
-1. APK из [релизов](https://github.com/SpaceNeuroX/proxy-turn-vk-android/releases) или сборка ниже.
-2. Сервер: вкладка **Деплой** или уже настроенный VPS с `wdtt-server`.
-3. VK: групповой звонок → ссылка `vk.com/call/join/…` или только хеш после `/join/`.
-4. Импорт: вставьте `wdtt://…` / `qwdtt://…`, QR или заполните профиль вручную.
-5. **Подключить** → разрешить VPN.
-
-> Завершая звонок: **«Просто завершить»**, не **«Завершить для всех»** — иначе хеш умрёт.
-
-До **4 хешей** в профиле — распределение нагрузки между звонками.
-
----
-
-## Сервер
-
-`server.go` → бинарь `wdtt-server`: DTLS, WRAP/RTP, выдача WG-конфига, `/etc/wdtt/passwords.json`, Telegram-бот.
-
-| Параметр | Значение |
-|----------|----------|
-| `56000/udp` | DTLS (клиенты) |
-| `56001/udp` | WireGuard внутри сервера |
-| `9000/udp` | локальный порт на Android |
-| `10.66.0.0/16` | подсеть клиентов (типичный адрес `10.66.66.x`) |
-
-Пароли: главный + до 10 пользовательских (срок, привязка к устройству). Обновление без рестарта: правка JSON → `kill -HUP $(pidof wdtt-server)`.
-
----
-
-## Сборка
+### Arch Linux
 
 ```bash
-export ANDROID_NDK_HOME=/path/to/android-ndk
-./scripts/build-native-libs.sh
-./gradlew :app:assembleDebug
+# Установить зависимости
+sudo pacman -S iproute2 wireguard-tools
+
+# Скачать бинарник из Release или собрать через go build
+# https://github.com/Gerasti/qWDTT-linux/releases
+# Для сборки: sudo pacman -S go
+
+# Сделать исполняемым
+chmod +x qwdtt-cli
+
+# Опционально: переместить в /usr/local/bin для доступа без полного пути
+# sudo mv qwdtt-cli /usr/local/bin/
+
+# Установить capabilities
+sudo setcap cap_net_admin+eip qwdtt-cli
 ```
 
-Одна ABI: `./scripts/build-go-lib.sh arm64-v8a`
+### Debian/Ubuntu
 
----
+```bash
+# Установить зависимости
+sudo apt update
+sudo apt install iproute2 wireguard-tools libcap2-bin
 
-## Структура репозитория
+# Скачать бинарник из Release или собрать через go build
+# https://github.com/Gerasti/qWDTT-linux/releases
+# Для сборки: sudo apt install golang-go
 
-```text
-app/           Kotlin + Compose, VPN, WebView (VK auth, капча)
-go_client/     Нативный клиент → libclient.so
-server.go      Серверная часть (совместим с WDTT)
-scripts/       Сборка Go под Android ABI
+# Сделать исполняемым
+chmod +x qwdtt-cli
+
+# Опционально: переместить в /usr/local/bin для доступа без полного пути
+# sudo mv qwdtt-cli /usr/local/bin/
+
+# Установить capabilities
+sudo setcap cap_net_admin+eip qwdtt-cli
 ```
 
----
+## Использование
+
+```bash
+# Добавить профиль
+qwdtt-cli add myserver "wdtt://1.2.3.4:56000:56001:0:password:hash1,hash2#MyServer"
+
+# Подключиться
+qwdtt-cli con myserver
+
+# Список профилей
+qwdtt-cli ls
+
+# Показать профиль
+qwdtt-cli sh myserver
+
+# Редактировать профиль
+qwdtt-cli edit myserver -password newpass
+
+# Удалить профиль
+qwdtt-cli rm myserver
+```
+
+## Команды
+
+```
+qwdtt-cli connect <profile> [флаги]  - Подключиться к VPN
+qwdtt-cli add <name> <wdtt://...>    - Добавить профиль
+qwdtt-cli edit <name> [флаги]        - Редактировать профиль
+qwdtt-cli remove <name>              - Удалить профиль
+qwdtt-cli list                       - Список профилей
+qwdtt-cli show <name>                - Показать профиль
+qwdtt-cli device-id [id]             - Показать/установить Device ID
+qwdtt-cli regenerate-id              - Перегенерировать Device ID
+qwdtt-cli version                    - Версия
+```
+
+### Короткие команды
+
+```
+con  - connect
+sh   - show
+ls   - list
+rm   - remove
+id   - device-id
+```
+
+### Флаги connect
+
+- `-workers N` - Количество воркеров, кратно 9 (default: 9)
+- `-mtu N` - MTU туннеля (default: 1280, max: 1500)
+- `-hashes H1,H2` - Переопределить VK-хеши профиля
+
+### Флаги edit
+
+- `-peer ADDR` - Изменить адрес сервера (IP:PORT)
+- `-password PASS` - Изменить пароль
+- `-hashes H1,H2` - Изменить VK-хеши
+- `-device-id ID` - Изменить Device ID (может требоваться серверами для идентификации слотов)
+- `-listen ADDR` - Изменить локальный UDP адрес (default: 127.0.0.1:9000)
+
+## Конфигурация
+
+Профили хранятся в `~/.config/qwdtt/profiles/`.
+Device ID хранится в `~/.config/qwdtt/device_id
+
+## Требования
+
+- Linux с WireGuard kernel module
+- Kernel module `wireguard`
+- `iproute2` (команда `ip`)
+- `wireguard-tools` (команда `wg`)
+- `cap_net_admin` capabilities для работы без sudo
+
+## Как это работает
+
+1. Ядро клиента подключается к TURN
+2. Проходит аутентификацию
+3. Проходит авторизацию wdtt-сервера
+4. Получает конфиг WireGuard
+5. CLI создаёт WireGuard интерфейс `wg-qwdtt` через kernel module
+6. Настраивается IP-адрес и MTU
+7. Добавляются маршруты:
+   - Исключения для TURN-серверов (через original gateway)
+   - Split-route через WireGuard (0.0.0.0/1 + 128.0.0.0/1)
+
+## Безопасность
+
+Программа использует Linux capabilities вместо полного root доступа:
+- `cap_net_admin+eip` на `qwdtt-cli` - управление сетевыми интерфейсами и маршрутами
+
 
 ## Лицензия
 
-[GNU GPL v3](LICENSE)
+GNU GPL-3.0
 
----
+## Структура проекта
 
-## Происхождение
-
-Форк [proxy-turn-vk-android](https://github.com/amurcanov/proxy-turn-vk-android) (автор **amurcanov**). Протокол и сервер общие; клиентская часть переработана под профили, импорт и удобство повседневного использования. Разработка форка — [SpaceNeuroX/proxy-turn-vk-android](https://github.com/SpaceNeuroX/proxy-turn-vk-android).
+```
+.
+├── main.go              # Точка входа
+├── cli.go               # CLI команды и логика профилей
+├── wireguard_linux.go   # WireGuard интеграция (kernel module)
+├── go_client/           # Core библиотека андроид qWDTT
+│   └── core/            # TURN, DTLS логика
+├── flake.nix            # Nix flake конфигурация
+├── go.mod               # Go dependencies
+└── README.md            # Вы всё ещё здесь
+```

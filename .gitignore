@@ -1,17 +1,3 @@
-# ===== Gradle =====
-.gradle/
-build/
-local.properties
-
-# ===== Android =====
-*.apk
-*.aab
-*.ap_
-*.dex
-*.class
-app/build/
-app/release/
-
 # ===== Go =====
 go.sum
 
@@ -23,7 +9,6 @@ jniLibs/
 app/src/main/jniLibs/
 
 # ===== Server binary =====
-app/src/main/assets/server
 server
 
 # ===== Keystore / Secrets =====
