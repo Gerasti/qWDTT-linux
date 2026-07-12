@@ -30,7 +30,6 @@ in
   ];
   services.qwdtt-cli = {
     enable = true;
-    useVendor = true;  # if false, Go modules will be downloaded from network during build
     # package = pkgs.qwdtt-cli;  # override package if needed
     deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
     wrappers = {

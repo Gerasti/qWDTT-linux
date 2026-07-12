@@ -10,19 +10,12 @@ with lib;
 let
   cfg = config.services.qwdtt-cli;
 
-  qwdtt-package = { useVendor ? true }: pkgs.buildGoModule {
+  qwdtt-package = pkgs.buildGoModule {
     pname = "qwdtt-cli";
     version = "0.0.2";
 
-    src = if useVendor then ./../.. else
-      pkgs.lib.cleanSourceWith {
-        src = ./../..;
-        filter = path: type:
-          let baseName = baseNameOf path;
-          in baseName != "vendor";
-      };
-
-    vendorHash = if useVendor then null else "sha256-X3Y/8T3n2iRai7NSOCPsLWzP/AV5EUVkBj4zqO6R/oE=";
+    src = ./../..;
+    vendorHash = null;
 
     subPackages = [ "." ];
     ldflags = [ "-s" "-w" ];
@@ -50,9 +43,9 @@ in
       type = types.bool;
       default = true;
       description = ''
-        Use vendored dependencies from ./vendor directory.
-        If set to false, dependencies will be fetched from network during build.
+        Deprecated: vendor is always used now.
       '';
+      visible = false;
     };
 
     deviceId = mkOption {
@@ -68,11 +61,10 @@ in
 
     package = mkOption {
       type = types.package;
-      default = qwdtt-package { useVendor = cfg.useVendor; };
-      defaultText = literalExpression "qwdtt-cli built with useVendor setting";
+      default = qwdtt-package;
+      defaultText = literalExpression "qwdtt-cli";
       description = ''
         The qwdtt-cli package to use.
-        By default, automatically builds based on useVendor option.
       '';
     };
 

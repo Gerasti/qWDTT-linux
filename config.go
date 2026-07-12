@@ -46,3 +46,23 @@ func getOrCreateDeviceID() string {
 
 	return id
 }
+
+func activeProfilePath() string {
+	return filepath.Join(configDir(), "active_profile")
+}
+
+func setActiveProfile(name string) error {
+	return os.WriteFile(activeProfilePath(), []byte(name), 0o644)
+}
+
+func getActiveProfile() string {
+	data, err := os.ReadFile(activeProfilePath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func clearActiveProfile() {
+	_ = os.Remove(activeProfilePath())
+}

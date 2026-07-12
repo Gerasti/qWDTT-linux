@@ -3,8 +3,14 @@ module qwdtt-cli
 go 1.26
 
 require (
+	github.com/bogdanfinn/fhttp v0.6.8
+	github.com/bogdanfinn/tls-client v1.14.0
+	github.com/cbeuw/connutil v1.0.1
 	github.com/godbus/dbus/v5 v5.2.2
-	wg-turn-client v0.0.0
+	github.com/pion/dtls/v3 v3.1.2
+	github.com/pion/logging v0.2.4
+	github.com/pion/turn/v5 v5.0.5
+	golang.org/x/crypto v0.52.0
 )
 
 require (
@@ -22,18 +28,8 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 )
 
-replace wg-turn-client => ./go_client
-
-// Копируем require из основного проекта для совместимости
 require (
-	github.com/bogdanfinn/fhttp v0.6.8 // indirect
-	github.com/bogdanfinn/tls-client v1.14.0 // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
-	github.com/cbeuw/connutil v1.0.1 // indirect
-	github.com/pion/dtls/v3 v3.1.2 // indirect
-	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/turn/v5 v5.0.5 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

@@ -175,11 +175,14 @@ func listCmd() {
 		hashes   int
 		status   string
 		priority int
+		active   bool
 	}
 
 	var profiles []profileInfo
 	maxNameLen := 0
 	maxPeerLen := 0
+
+	activeProfile := getActiveProfile()
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -201,6 +204,7 @@ func listCmd() {
 			hashes:   len(prof.Hashes),
 			status:   status,
 			priority: prof.Priority,
+			active:   name == activeProfile,
 		})
 
 		if len(name) > maxNameLen {
@@ -213,7 +217,12 @@ func listCmd() {
 
 	fmt.Println("Профили:")
 	for _, p := range profiles {
-		fmt.Printf("  %-*s  %-*s  %d хешей  [%-8s]  priority: %d\n",
+		activeMarker := " "
+		if p.active {
+			activeMarker = "*"
+		}
+		fmt.Printf(" %s %-*s  %-*s  %d хешей  [%-8s]  priority: %d\n",
+			activeMarker,
 			maxNameLen, p.name,
 			maxPeerLen, p.peer,
 			p.hashes,

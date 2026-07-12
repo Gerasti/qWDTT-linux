@@ -175,7 +175,3 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# wg-turn-client v0.0.0 => ./go_client
-## explicit; go 1.25.0
-wg-turn-client/core
-# wg-turn-client => ./go_client

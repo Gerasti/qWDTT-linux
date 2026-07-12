@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"wg-turn-client/core"
+	"qwdtt-cli/internal/core"
 )
 func connectCmd() {
 	var profileName string
@@ -150,6 +150,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
+		clearActiveProfile()
 		return false, false
 	}
 
@@ -186,10 +187,15 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 	fmt.Printf("  Peer: %s\n", cfg.PeerAddr)
 	fmt.Printf("  Workers: %d\n", cfg.Workers)
 
+	if err := setActiveProfile(profileName); err != nil {
+		fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+	}
+
 	c := core.New(cfg)
 	events, err := c.Start()
 	if err != nil {
 		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
+		clearActiveProfile()
 		return false, false
 	}
 
@@ -229,6 +235,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 			if wgConfigured {
 				teardownWG()
 			}
+			clearActiveProfile()
 			return false, false
 		case <-stopCh:
 			c.Stop()
@@ -236,6 +243,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 				fmt.Println("\n[*] Удаление WireGuard интерфейса...")
 				teardownWG()
 			}
+			clearActiveProfile()
 			return false, false
 		case <-suspendCh:
 			fmt.Println("\n[*] Обнаружен resume, переподключение...")
@@ -243,6 +251,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 			if wgConfigured {
 				teardownWG()
 			}
+			clearActiveProfile()
 			return false, true
 		case ev, ok := <-events:
 			if !ok {
@@ -267,6 +276,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 					if wgConfigured {
 						teardownWG()
 					}
+					clearActiveProfile()
 					return false, false
 				}
 			case core.EventLog:
@@ -280,6 +290,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 					if wgConfigured {
 						teardownWG()
 					}
+					clearActiveProfile()
 					return false, false
 				}
 			case core.EventError:
@@ -296,6 +307,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 						fmt.Println("  1. Команды ip и wg доступны")
 						fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
 						c.Stop()
+						clearActiveProfile()
 						return false, false
 					}
 					fmt.Println("[OK] WireGuard интерфейс настроен и активен")
@@ -306,6 +318,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
 						c.Stop()
 						teardownWG()
+						clearActiveProfile()
 						return false, false
 					}
 					fmt.Println("[OK] Туннель работает корректно")
@@ -327,6 +340,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 					if wgConfigured {
 						teardownWG()
 					}
+					clearActiveProfile()
 					return false, false
 				}
 			case core.EventStats:
@@ -357,6 +371,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 						}
 					}
 					fmt.Println("[*] Завершено")
+					clearActiveProfile()
 					return true, false
 				case <-stopCh:
 					c.Stop()
@@ -366,6 +381,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 							fmt.Printf("[!] Ошибка при удалении интерфейса: %v\n", err)
 						}
 					}
+					clearActiveProfile()
 					return false, false
 				case <-suspendCh:
 					fmt.Println("\n[*] Обнаружен resume, переподключение...")
@@ -379,6 +395,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 					if wgConfigured {
 						teardownWG()
 					}
+					clearActiveProfile()
 					return false, false
 				case <-func() <-chan time.Time {
 					if healthCheckTicker != nil {

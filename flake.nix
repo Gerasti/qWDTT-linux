@@ -25,14 +25,13 @@
     in
     {
       overlays.default = final: prev: {
-        qwdtt-cli = final.callPackage ({ buildGoModule, lib, useVendor ? true }:
+        qwdtt-cli = final.callPackage ({ buildGoModule, lib }:
           buildGoModule {
             pname = "qwdtt-cli";
-            version = "0.0.1";
+            version = "0.0.2";
 
             src = ./.;
-            vendorHash = if useVendor then null else "sha256-X3Y/8T3n2iRai7NSOCPsLWzP/AV5EUVkBj4zqO6R/oE=";
-#            vendorHash = if useVendor then null else lib.fakeHash;
+            vendorHash = null;
 
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];
@@ -48,7 +47,6 @@
 
       packages = eachSystem ({ pkgs, ... }: {
         default = pkgs.qwdtt-cli;
-        no-vendor = pkgs.qwdtt-cli.override { useVendor = false; };
       });
 
       devShells = eachSystem ({ pkgs, ... }: {
