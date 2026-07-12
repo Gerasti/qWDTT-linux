@@ -1,14 +1,13 @@
 # qWDTT CLI
 
-CLI версия VPN клиента Linux через TURN-серверы VK с поддержкой WireGuard. Легко подключается в скрипты и мало весит.
+CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
 
 ## Возможности
 
-- Подключение к VPN через TURN-серверы VK
-- Управление профилями (добавление, редактирование, удаление)
-- Kernel WireGuard без sudo (через capabilities)
-- Split-routing (0.0.0.0/1 + 128.0.0.0/1)
-- Автоматическое исключение TURN-серверов из VPN маршрутов
+- Kernel WireGuard без sudo (capabilities)
+- Управление профилями с приоритетами
+- Auto-switch - переключение между профилями при сбоях
+- Автоматическое переподключение после suspend/resume
 
 ## Установка
 
@@ -74,6 +73,13 @@ chmod +x qwdtt-cli
 
 # Установить capabilities
 sudo setcap cap_net_admin+eip qwdtt-cli
+
+# Опционально: установить автодополнение
+# Bash:
+sudo cp completions/qwdtt-cli.bash /etc/bash_completion.d/qwdtt-cli
+# Fish:
+mkdir -p ~/.config/fish/completions
+cp completions/qwdtt-cli.fish ~/.config/fish/completions/
 ```
 
 ### Debian/Ubuntu
@@ -95,34 +101,31 @@ chmod +x qwdtt-cli
 
 # Установить capabilities
 sudo setcap cap_net_admin+eip qwdtt-cli
+
+# Опционально: установить автодополнение
+# Bash:
+sudo cp completions/qwdtt-cli.bash /etc/bash_completion.d/qwdtt-cli
+# Fish:
+mkdir -p ~/.config/fish/completions
+cp completions/qwdtt-cli.fish ~/.config/fish/completions/
 ```
 
 ## Использование
 
 ```bash
 # Добавить профиль
-qwdtt-cli add myserver "wdtt://1.2.3.4:56000:56001:0:password:hash1,hash2#MyServer"
+qwdtt-cli add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
 
-# Подключиться к профилю
+# Подключиться
 qwdtt-cli con myserver
 
-# Подключиться с интерактивным выбором (если профиль не указан)
-qwdtt-cli con
+# Auto-switch режим
+qwdtt-cli con -auto-switch
 
-# Подключиться с автоматическим переключением на другие профили при неудаче
-qwdtt-cli con myserver -auto-switch
-
-# Список профилей
-qwdtt-cli ls
-
-# Показать профиль
-qwdtt-cli sh myserver
-
-# Редактировать профиль
-qwdtt-cli edit myserver -password newpass
-
-# Удалить профиль
-qwdtt-cli rm myserver
+# Управление
+qwdtt-cli ls                    # список
+qwdtt-cli edit myserver -priority 100
+qwdtt-cli disable myserver
 ```
 
 ## Команды
@@ -141,7 +144,7 @@ qwdtt-cli regenerate-id              - Перегенерировать Device I
 qwdtt-cli version                    - Версия
 ```
 
-### Короткие команды
+### Короткие алиасы
 
 ```
 con  - connect
@@ -151,109 +154,67 @@ rm   - remove
 id   - device-id
 ```
 
-### Управление профилями
+## Флаги connect
+
+- `-auto-switch` - переключение между профилями при сбоях
+- `-workers N` - количество воркеров (default: 9)
+- `-mtu N` - MTU (default: 1280)
+- `-timeout N` - таймаут для auto-switch (default: 120)
+
+## Флаги edit
+
+- `-peer ADDR` - изменить адрес сервера (IP:PORT)
+- `-password PASS` - изменить пароль
+- `-hashes H1,H2` - изменить VK-хеши
+- `-device-id ID` - изменить Device ID
+- `-listen ADDR` - изменить локальный UDP адрес (default: 127.0.0.1:9000)
+- `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
+
+## Управление профилями
+
+**Приоритеты:**
+- Профили с более высоким приоритетом используются первыми в `-auto-switch`
+- По умолчанию priority = 0
+- Пример: `qwdtt-cli edit myserver -priority 100`
 
 **Отключенные профили:**
-- Не отображаются в интерактивном выборе (`qwdtt-cli con`)
-- Не используются в автопереключении (`-auto-switch`)
-- Можно подключиться явно указав имя: `qwdtt-cli con disabled-profile`
-- Используется для временного отключения проблемных серверов
+- Не отображаются в интерактивном выборе
+- Не используются в `-auto-switch`
+- Можно подключиться явно: `qwdtt-cli con disabled-profile`
 
-**Приоритеты профилей:**
-- Профили с более высоким приоритетом используются первыми в режиме `-auto-switch`
-- По умолчанию все профили имеют приоритет 0
-- Установить приоритет: `qwdtt-cli edit myserver -priority 100`
-- Полезно для предпочтения более быстрых или надёжных серверов
+## Suspend/Resume
 
-### Флаги connect
-
-- `-workers N` - Количество воркеров, кратно 9 (default: 9)
-- `-mtu N` - MTU туннеля (default: 1280, max: 1500)
-- `-hashes H1,H2` - Переопределить VK-хеши профиля
-- `-auto-switch` - Автоматически переключаться на другие профили при неудаче
-- `-timeout N` - Таймаут для режима auto-switch в секундах (default: 120)
-
-### Флаги edit
-
-- `-peer ADDR` - Изменить адрес сервера (IP:PORT)
-- `-password PASS` - Изменить пароль
-- `-hashes H1,H2` - Изменить VK-хеши
-- `-device-id ID` - Изменить Device ID (может требоваться серверами для идентификации слотов)
-- `-listen ADDR` - Изменить локальный UDP адрес (default: 127.0.0.1:9000)
-- `-priority N` - Установить приоритет профиля (выше число = выше приоритет)
-
-## Конфигурация
-
-Профили хранятся в `~/.config/qwdtt/profiles/`.
-Device ID хранится в `~/.config/qwdtt/device_id`
-
-### Автодополнение (bash/fish)
-
-Для удобной работы можно установить автодополнение команд и имен профилей:
-
-**Bash:**
-```bash
-# Разовая загрузка (текущая сессия)
-source completions/qwdtt-cli.bash
-
-# Постоянная установка
-sudo cp completions/qwdtt-cli.bash /etc/bash_completion.d/qwdtt-cli
-# или для локального пользователя:
-mkdir -p ~/.local/share/bash-completion/completions
-cp completions/qwdtt-cli.bash ~/.local/share/bash-completion/completions/qwdtt-cli
-```
-
-**Fish:**
-```bash
-# Установка
-mkdir -p ~/.config/fish/completions
-cp completions/qwdtt-cli.fish ~/.config/fish/completions/
-```
-
-После установки автодополнение заработает в новых терминальных сессиях. Можно использовать TAB для автодополнения команд и имен профилей.
+Автоматическое переподключение после пробуждения через systemd D-Bus. Работает без настройки на системах с systemd.
 
 ## Требования
 
 - Linux с WireGuard kernel module
-- Kernel module `wireguard`
-- `iproute2` (команда `ip`)
-- `wireguard-tools` (команда `wg`)
-- `cap_net_admin` capabilities для работы без sudo
-
-## Как это работает
-
-1. Ядро клиента подключается к TURN
-2. Проходит аутентификацию
-3. Проходит авторизацию wdtt-сервера
-4. Получает конфиг WireGuard
-5. CLI создаёт WireGuard интерфейс `wg-qwdtt` через kernel module
-6. Настраивается IP-адрес и MTU
-7. Добавляются маршруты:
-   - Исключения для TURN-серверов (через original gateway)
-   - Split-route через WireGuard (0.0.0.0/1 + 128.0.0.0/1)
-8. Проверяется работоспособность туннеля (ping через WireGuard интерфейс)
-9. При использовании флага `-auto-switch`: если туннель не работает, автоматически переключается на следующий профиль
-
-## Безопасность
-
-Программа использует Linux capabilities вместо полного root доступа:
-- `cap_net_admin+eip` на `qwdtt-cli` - управление сетевыми интерфейсами и маршрутами
-
-
-## Лицензия
-
-GNU GPL-3.0
+- `iproute2`, `wireguard-tools`
+- `cap_net_admin` capabilities
+- systemd (для suspend/resume)
 
 ## Структура проекта
 
 ```
 .
-├── main.go              # Точка входа
-├── cli.go               # CLI команды и логика профилей
-├── wireguard_linux.go   # WireGuard интеграция (kernel module)
-├── go_client/           # Core библиотека андроид qWDTT
-│   └── core/            # TURN, DTLS логика
+├── cli.go               # Точка входа
+├── connect.go           # Логика подключения
+├── commands.go          # Команды управления профилями
+├── profile.go           # Работа с профилями
+├── config.go            # Конфигурация и Device ID
+├── utils.go             # Вспомогательные функции
+├── suspend.go           # Мониторинг suspend/resume
+├── url_parser.go        # Парсинг wdtt:// URL
+├── wireguard_linux.go   # WireGuard интеграция
+├── go_client/           # Core библиотека (TURN, DTLS)
+│   └── core/
+├── vendor/              # Vendored dependencies
+├── modules/nixos/       # NixOS module
+├── completions/         # Bash/Fish автодополнение
 ├── flake.nix            # Nix flake конфигурация
-├── go.mod               # Go dependencies
-└── README.md            # Вы всё ещё здесь
+└── go.mod               # Go dependencies
 ```
+
+## Лицензия
+
+GNU GPL-3.0
