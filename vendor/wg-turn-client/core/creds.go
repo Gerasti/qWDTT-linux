@@ -506,7 +506,7 @@ func solveCaptchaBySelectedMode(
 		return requestWebViewCaptcha(streamID, captchaErr, "selected", captchaSelectedWebViewTimeout, captchaResultChan, emitCaptchaRequest)
 	case "rjs":
 		log.Printf("[STREAM %d] [КАПЧА] RJS: Go v2 выбран в настройках (attempt %d)", streamID, attempt)
-		token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, 2)
+		token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
 		if solveErr == nil {
 			return token, nil
 		}
@@ -519,7 +519,7 @@ func solveCaptchaBySelectedMode(
 
 	log.Printf("[STREAM %d] [КАПЧА] AUTO: старт цепочки (captcha attempt %d)", streamID, attempt)
 
-	token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, 2)
+	token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
 	if solveErr == nil {
 		log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 решил капчу", streamID)
 		return token, nil
@@ -528,7 +528,7 @@ func solveCaptchaBySelectedMode(
 		return "", solveErr
 	}
 	lastErr := solveErr
-	log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 не решил за 2 попытки: %v", streamID, solveErr)
+	log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 не решил за %d попыток: %v", streamID, captchaV2MaxAttempts, solveErr)
 
 	for wbvAttempt := 1; wbvAttempt <= 2; wbvAttempt++ {
 		log.Printf("[STREAM %d] [КАПЧА] AUTO: WBV Auto попытка %d/2 (timeout %s)", streamID, wbvAttempt, captchaAutoWebViewTimeout)

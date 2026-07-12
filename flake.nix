@@ -31,10 +31,8 @@
             version = "0.0.1";
 
             src = ./.;
-
-            # useVendor = true: используем ./vendor
-            # useVendor = false: качаем из сети
-            vendorHash = if useVendor then null else "sha256-1pwf4q1ry2iv7v0a9w50cy0w520bjyj4ay53fccqgfihv6zcapzq";
+            vendorHash = if useVendor then null else "sha256-X3Y/8T3n2iRai7NSOCPsLWzP/AV5EUVkBj4zqO6R/oE=";
+#            vendorHash = if useVendor then null else lib.fakeHash;
 
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];

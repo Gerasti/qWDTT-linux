@@ -43,6 +43,7 @@ var (
 	errCaptchaV2Bot       = errors.New("captcha bot challenge")
 
 	captchaV2MaxAttempts = 10
+	captchaV2MaxSliderChecks = 2
 
 	captchaV2DebugCache  sync.Map // scriptURL -> string
 	captchaV2HeaderOrder = []string{

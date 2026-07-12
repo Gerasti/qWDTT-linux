@@ -101,7 +101,7 @@ func applyWGConfig(config string, turnIPs []string) error {
 
 	if mtu != "" {
 		cmd = exec.Command("ip", "link", "set", wgIface, "mtu", mtu)
-		cmd.Run() // игнорируем ошибки MTU
+		cmd.Run()
 	}
 
 	gatewayCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $3}' | head -n1")
@@ -135,4 +135,26 @@ func teardownWG() error {
 		return nil
 	}
 	return nil
+}
+
+func testWGConnectivity() error {
+	cmd := exec.Command("ip", "link", "show", wgIface)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("interface not found")
+	}
+
+	testHosts := []string{
+		"1.1.1.1",
+		"8.8.8.8",
+		"208.67.222.222",
+	}
+
+	for _, host := range testHosts {
+		cmd = exec.Command("ping", "-c", "1", "-W", "3", "-I", wgIface, host)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no connectivity through tunnel")
 }

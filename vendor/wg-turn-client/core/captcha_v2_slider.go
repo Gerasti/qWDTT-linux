@@ -67,6 +67,9 @@ func (s *captchaV2Session) solveSliderCaptcha(
 	}
 
 	limit := puzzle.Attempts
+	if limit > captchaV2MaxSliderChecks {
+		limit = captchaV2MaxSliderChecks
+	}
 	if limit > len(guesses) {
 		limit = len(guesses)
 	}
@@ -130,6 +133,9 @@ func parseSliderPuzzleV2(raw map[string]any) (*sliderPuzzleV2, error) {
 	}
 	status := captchaV2StringifyAny(resp["status"])
 	if !strings.EqualFold(status, "ok") {
+		if strings.EqualFold(status, "error") || strings.EqualFold(status, "error_limit") {
+			return nil, errCaptchaV2RateLimit
+		}
 		return nil, fmt.Errorf("slider getContent status: %s", status)
 	}
 	rawImage := captchaV2StringifyAny(resp["image"])

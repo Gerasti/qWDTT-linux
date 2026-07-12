@@ -12,7 +12,7 @@ let
 
   qwdtt-package = { useVendor ? true }: pkgs.buildGoModule {
     pname = "qwdtt-cli";
-    version = "0.0.1";
+    version = "0.0.2";
 
     src = if useVendor then ./../.. else
       pkgs.lib.cleanSourceWith {
@@ -22,10 +22,18 @@ let
           in baseName != "vendor";
       };
 
-    vendorHash = if useVendor then null else "sha256-+F/FvtkwuocZc6N4RaSXC4jCgWeg8KTAPjsKnwMmjt8=";
+    vendorHash = if useVendor then null else "sha256-X3Y/8T3n2iRai7NSOCPsLWzP/AV5EUVkBj4zqO6R/oE=";
 
     subPackages = [ "." ];
     ldflags = [ "-s" "-w" ];
+
+    postInstall = ''
+      mkdir -p $out/share/bash-completion/completions
+      cp $src/completions/qwdtt-cli.bash $out/share/bash-completion/completions/qwdtt-cli
+
+      mkdir -p $out/share/fish/vendor_completions.d
+      cp $src/completions/qwdtt-cli.fish $out/share/fish/vendor_completions.d/qwdtt-cli.fish
+    '';
 
     meta = with lib; {
       description = "VPN client через TURN-серверы VK";
@@ -86,6 +94,24 @@ in
         '';
       };
     };
+
+    enableBashIntegration = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Whether to enable bash completion for qwdtt-cli.
+        This will install the completion script to /etc/bash_completion.d/.
+      '';
+    };
+
+    enableFishIntegration = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Whether to enable fish completion for qwdtt-cli.
+        This will install the completion script to fish completions directory.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -139,5 +165,13 @@ in
     };
 
     boot.kernelModules = [ "wireguard" ];
+
+    programs.bash.completion.enable = mkIf cfg.enableBashIntegration true;
+
+    environment.pathsToLink = mkIf cfg.enableBashIntegration [
+      "/share/bash-completion"
+    ];
+
+    programs.fish.enable = mkIf cfg.enableFishIntegration true;
   };
 }
