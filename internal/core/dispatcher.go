@@ -108,12 +108,19 @@ func (d *Dispatcher) Unregister(slot *WorkerSlot) {
 		}
 	}
 	remaining := len(d.workers)
-	// Подстраховка: если текущий rrIndex вылез за границу после удаления
 	if d.rrIndex >= remaining && remaining > 0 {
 		d.rrIndex = d.rrIndex % remaining
 	}
 	d.rrCount = 0
 	d.mu.Unlock()
+
+	close(slot.SendCh)
+
+	// Drain channel to prevent memory leak
+	for pkt := range slot.SendCh {
+		putPktBuf(pkt)
+	}
+
 	log.Printf("[ДИСП] Воркер #%d отключён (осталось: %d)", slot.ID, remaining)
 }
 

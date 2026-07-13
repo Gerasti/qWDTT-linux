@@ -76,7 +76,7 @@ func WorkerGroup(
 		if ctx.Err() != nil {
 			return
 		}
-		credsCtx, credsCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		credsCtx, credsCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		go func() {
 			select {
 			case <-ctx.Done():
@@ -129,7 +129,7 @@ func WorkerGroup(
 		}
 
 		getStreamCache(credStreamID).invalidate(credStreamID)
-		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 35*time.Second)
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer refreshCancel()
 		u, p, urls, refreshErr := GetCreds(refreshCtx, hash, credStreamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
 		if refreshErr != nil {
@@ -162,8 +162,8 @@ func WorkerGroup(
 	for i, wid := range workerIDs {
 		wg.Add(1)
 
-		// Stagger: 500мс между воркерами
-		workerDelay := time.Duration(i) * 500 * time.Millisecond
+		// Stagger: 200мс между воркерами
+		workerDelay := time.Duration(i) * 200 * time.Millisecond
 
 		go func(wid int, delay time.Duration) {
 			defer wg.Done()

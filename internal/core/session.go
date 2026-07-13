@@ -20,11 +20,11 @@ import (
 
 const (
 	workerSendBuf      = 128
-	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
+	sessionReadTimeout = 35 * time.Second
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
-	keepaliveByte      = 0xFF // DTLS-level keepalive marker
-	keepaliveInterval  = 15 * time.Second
+	keepaliveByte      = 0xFF
+	keepaliveInterval  = 20 * time.Second
 )
 
 // Handshake semaphore: limit to 3 concurrent DTLS handshakes
@@ -157,7 +157,7 @@ func RunSession(
 	sessionWg.Add(1)
 	go func() {
 		defer sessionWg.Done()
-		t := time.NewTicker(10 * time.Second)
+		t := time.NewTicker(20 * time.Second)
 		defer t.Stop()
 		for {
 			select {
@@ -277,7 +277,7 @@ func RunSession(
 	}
 	defer dtlsConn.Close()
 
-	hctx, hcancel := context.WithTimeout(sessCtx, 50*time.Second)
+	hctx, hcancel := context.WithTimeout(sessCtx, 20*time.Second)
 	log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 	err = dtlsConn.HandshakeContext(hctx)
 	hcancel()
@@ -423,9 +423,9 @@ func RunSession(
 	}()
 
 	proxyWg.Wait()
-	sessCancel()
 	relayWg.Wait()
 	sessionWg.Wait()
+	sessCancel()
 	_ = pipeA.Close()
 	_ = pipeB.Close()
 	log.Printf("[СЕССИЯ #%d] Завершена", sessionID)
