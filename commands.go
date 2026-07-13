@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func addCmd() {
@@ -466,4 +468,98 @@ func listDisabledProfileNames() []string {
 		}
 	}
 	return names
+}
+
+func disconnectCmd() {
+	activeProfile := getActiveProfile()
+	if activeProfile == "" {
+		fmt.Println("[!] Нет активного подключения")
+		os.Exit(1)
+	}
+
+	fmt.Printf("[*] Отключение профиля '%s'...\n", activeProfile)
+
+	cmd := exec.Command("pgrep", "-f", "qwdtt-cli")
+	output, err := cmd.Output()
+	if err == nil {
+		pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+		selfPID := fmt.Sprintf("%d", os.Getpid())
+
+		for _, pid := range pids {
+			pid = strings.TrimSpace(pid)
+			if pid == "" || pid == selfPID {
+				continue
+			}
+
+			fmt.Printf("[*] Завершение процесса qwdtt-cli (PID: %s)...\n", pid)
+			killCmd := exec.Command("kill", "-INT", pid)
+			killCmd.Run()
+		}
+
+		time.Sleep(2 * time.Second)
+
+		for _, pid := range pids {
+			pid = strings.TrimSpace(pid)
+			if pid == "" || pid == selfPID {
+				continue
+			}
+
+			if exec.Command("kill", "-0", pid).Run() == nil {
+				fmt.Printf("[*] Принудительное завершение PID: %s...\n", pid)
+				exec.Command("kill", "-9", pid).Run()
+			}
+		}
+	}
+
+	if err := teardownWG(); err == nil {
+		fmt.Println("[OK] WireGuard интерфейс удален")
+	}
+
+	clearActiveProfile()
+	fmt.Println("[OK] Отключено")
+}
+
+func debugCmd() {
+	activeProfile := getActiveProfile()
+	if activeProfile == "" {
+		fmt.Println("[!] Нет активного подключения")
+		os.Exit(1)
+	}
+
+	fmt.Printf("=== DEBUG INFO ===\n\n")
+	fmt.Printf("Активный профиль: %s\n\n", activeProfile)
+
+	prof, err := loadProfile(activeProfile)
+	if err != nil {
+		fmt.Printf("[ERROR] Не удалось загрузить профиль: %v\n", err)
+	} else {
+		fmt.Printf("Конфигурация профиля:\n")
+		fmt.Printf("  Peer: %s\n", prof.PeerAddr)
+		fmt.Printf("  Listen: %s\n", prof.Listen)
+		if prof.TurnHost != "" {
+			fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
+		}
+		fmt.Printf("  Device ID: %s\n", prof.DeviceID)
+		fmt.Printf("  Priority: %d\n\n", prof.Priority)
+	}
+
+	if stats, err := getWGStats(); err == nil {
+		fmt.Printf("Input:\n")
+		fmt.Printf("  Bytes: %s\n", formatBytes(stats.RxBytes))
+		fmt.Printf("  Packets: %d\n\n", stats.RxPackets)
+
+		fmt.Printf("Output:\n")
+		fmt.Printf("  Bytes: %s\n", formatBytes(stats.TxBytes))
+		fmt.Printf("  Packets: %d\n\n", stats.TxPackets)
+	} else {
+		fmt.Printf("Input/Output: [ERROR] %v\n\n", err)
+	}
+
+	fmt.Printf("Использование ресурсов (qwdtt-cli):\n")
+	if usage, err := getProcessUsage(); err == nil {
+		fmt.Printf("  CPU: %.1f%%\n", usage.CPU)
+		fmt.Printf("  RAM: %s\n", formatBytes(usage.Memory))
+	} else {
+		fmt.Printf("  [ERROR] %v\n", err)
+	}
 }

@@ -15,7 +15,7 @@ _qwdtt_cli_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect add edit remove list show enable disable device-id regenerate-id version help"
+        local commands="connect disconnect debug add edit remove list show enable disable device-id regenerate-id version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -32,9 +32,12 @@ _qwdtt_cli_completions() {
     # Normalize aliases to full commands for consistent handling
     case "$cmd" in
         con) cmd="connect" ;;
+        discon) cmd="disconnect" ;;
         sh) cmd="show" ;;
         ls) cmd="list" ;;
         rm) cmd="remove" ;;
+        en) cmd="enable" ;;
+        dis) cmd="disable" ;;
         id) cmd="device-id" ;;
     esac
 
@@ -79,6 +82,9 @@ _qwdtt_cli_completions() {
             ;;
         device-id)
             # No completion for device-id argument
+            ;;
+        disconnect|debug)
+            # These commands don't take arguments
             ;;
         list|regenerate-id|version|help)
             # These commands don't take arguments

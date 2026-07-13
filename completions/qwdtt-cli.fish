@@ -32,6 +32,8 @@ end
 # Main commands (only primary commands, no aliases in completion list)
 complete -c qwdtt-cli -f
 complete -c qwdtt-cli -n __fish_use_subcommand -a connect -d "Подключиться к VPN"
+complete -c qwdtt-cli -n __fish_use_subcommand -a disconnect -d "Отключиться от VPN"
+complete -c qwdtt-cli -n __fish_use_subcommand -a debug -d "Отладочная информация"
 complete -c qwdtt-cli -n __fish_use_subcommand -a add -d "Добавить профиль"
 complete -c qwdtt-cli -n __fish_use_subcommand -a edit -d "Редактировать профиль"
 complete -c qwdtt-cli -n __fish_use_subcommand -a remove -d "Удалить профиль"
@@ -55,11 +57,11 @@ complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l auto-switch -d "�
 # show, remove - all profile names
 complete -c qwdtt-cli -n "__qwdtt_seen_command show sh remove rm" -a "(__qwdtt_all_profiles)" -d "Профиль"
 
-# enable - only disabled profiles
-complete -c qwdtt-cli -n "__qwdtt_seen_command enable" -a "(__qwdtt_disabled_profiles)" -d "Профиль"
+# enable/en - only disabled profiles
+complete -c qwdtt-cli -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Профиль"
 
-# disable - only enabled profiles
-complete -c qwdtt-cli -n "__qwdtt_seen_command disable" -a "(__qwdtt_profiles)" -d "Профиль"
+# disable/dis - only enabled profiles
+complete -c qwdtt-cli -n "__qwdtt_seen_command disable dis" -a "(__qwdtt_profiles)" -d "Профиль"
 
 # edit - all profile names and flags
 complete -c qwdtt-cli -n "__qwdtt_seen_command edit" -a "(__qwdtt_all_profiles)" -d "Профиль"

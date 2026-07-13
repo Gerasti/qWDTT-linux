@@ -18,13 +18,15 @@ Usage:  qwdtt-cli [OPTIONS] COMMAND
   remove <name>               Удалить профиль (alias: rm)
   list                        Показать все профили (alias: ls)
   show <name>                 Показать детали профиля (alias: sh)
-  enable <name>               Включить профиль
-  disable <name>              Отключить профиль
+  enable <name>               Включить профиль (alias: en)
+  disable <name>              Отключить профиль (alias: dis)
 
 Подключение:
   connect [profile] [флаги]   Подключиться к VPN (alias: con)
                               Если профиль не указан, будет интерактивный выбор
                               Отключенные профили можно использовать явно указав имя
+  disconnect                  Отключиться от VPN (alias: discon)
+	  debug                       Показать отладочную информацию о текущем подключении (например, watch -n 1 qwdtt-cli debug)
 
 Управление Device ID:
   device-id [id]              Показать или установить Device ID (alias: id)
@@ -55,9 +57,11 @@ Usage:  qwdtt-cli [OPTIONS] COMMAND
   qwdtt-cli con                        # интерактивный выбор профиля
   qwdtt-cli con myserver               # подключиться к профилю
   qwdtt-cli con myserver -auto-switch  # с автопереключением при неудаче
-  qwdtt-cli disable myserver           # отключить профиль
+  qwdtt-cli debug                      # показать статистику текущего подключения
+  qwdtt-cli discon                     # отключиться от VPN
+  qwdtt-cli dis myserver               # отключить профиль (alias для disable)
   qwdtt-cli con disabled-profile       # можно подключиться явно указав имя
-  qwdtt-cli enable myserver            # включить профиль обратно
+  qwdtt-cli en myserver                # включить профиль (alias для enable)
   qwdtt-cli edit myserver -password newpass
   qwdtt-cli edit myserver -priority 100  # установить высокий приоритет
   qwdtt-cli ls
@@ -75,6 +79,10 @@ func main() {
 	switch cmd {
 	case "connect", "con":
 		connectCmd()
+	case "disconnect", "discon":
+		disconnectCmd()
+	case "debug":
+		debugCmd()
 	case "add":
 		addCmd()
 	case "edit":
@@ -85,9 +93,9 @@ func main() {
 		listCmd()
 	case "show", "sh":
 		showCmd()
-	case "enable":
+	case "enable", "en":
 		enableCmd()
-	case "disable":
+	case "disable", "dis":
 		disableCmd()
 	case "device-id", "id":
 		deviceIDCmd()
