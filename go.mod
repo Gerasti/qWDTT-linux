@@ -11,6 +11,7 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/turn/v5 v5.0.5
 	golang.org/x/crypto v0.52.0
+	golang.org/x/net v0.54.0
 )
 
 require (
@@ -30,7 +31,6 @@ require (
 
 require (
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
-	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )

@@ -36,13 +36,18 @@ Usage:  qwdtt-cli [OPTIONS] COMMAND
   version                     Показать версию
   help                        Показать это сообщение
 
-Флаги connect:
-  -workers N                  Количество воркеров, кратно 9 (default: 9)
-  -mtu N                      MTU туннеля (default: 1280, max: 1500)
-  -hashes H1,H2               Переопределить VK-хеши профиля
-  -auto-switch                Автоматически переключаться на другие профили при неудаче
-                              (использует только включенные профили)
-  -timeout N                  Таймаут для -auto-switch в секундах (default: 120)
+Flags connect:
+  -workers N                  Number of workers, multiple of 9 (default: 9)
+  -mtu N                      Tunnel MTU (default: 1280, max: 1500)
+  -hashes H1,H2               Override profile VK hashes
+  -dns RESOLVER               DNS resolver (default: yandex)
+                              Options: yandex, cloudflare, google,
+                              doh-yandex, doh-cloudflare, doh-google,
+                              custom:8.8.8.8:53,1.1.1.1:53
+                              doh:https://dns.example.com/dns-query
+  -auto-switch                Auto-switch to other profiles on failure
+                              (uses enabled profiles only)
+  -timeout N                  Timeout for -auto-switch in seconds (default: 120)
 
 Флаги edit:
   -peer ADDR                  Изменить адрес сервера (IP:PORT)

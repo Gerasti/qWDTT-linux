@@ -16,11 +16,12 @@ func connectCmd() {
 	var profileName string
 
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
-	workers := fs.Int("workers", 9, "Количество воркеров")
-	mtu := fs.Int("mtu", 1280, "MTU туннеля")
-	hashes := fs.String("hashes", "", "VK-хеши через запятую")
-	autoSwitch := fs.Bool("auto-switch", false, "Автоматически переключаться на другие профили при неудаче")
-	timeout := fs.Int("timeout", 120, "Таймаут подключения в секундах (только для -auto-switch)")
+	workers := fs.Int("workers", 9, "Number of workers")
+	mtu := fs.Int("mtu", 1280, "Tunnel MTU")
+	hashes := fs.String("hashes", "", "VK hashes (comma-separated)")
+	autoSwitch := fs.Bool("auto-switch", false, "Auto-switch to other profiles on failure")
+	timeout := fs.Int("timeout", 120, "Connection timeout in seconds (for -auto-switch)")
+	dns := fs.String("dns", "yandex", "DNS resolver (yandex|cloudflare|google|doh-yandex|doh-cloudflare|doh-google|custom:IP:PORT|doh:https://...)")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -110,7 +111,7 @@ func connectCmd() {
 					}
 				}
 
-				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *timeout, *autoSwitch, sigCh, stopCh)
+				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *timeout, *autoSwitch, sigCh, stopCh)
 				if success {
 					return
 				}
@@ -146,7 +147,7 @@ func connectCmd() {
 	}
 }
 
-func tryConnectProfile(profileName string, workers, mtu int, hashesOverride string, timeoutSec int, autoSwitch bool, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
+func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg string, timeoutSec int, autoSwitch bool, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
@@ -170,6 +171,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride stri
 		Workers:     workers,
 		CaptchaMode: "rjs",
 		MTU:         mtu,
+		DNS:         dnsArg,
 	}
 
 	if hashesOverride != "" {

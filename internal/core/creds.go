@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +22,6 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 )
 
-// ─── VK Credential Sets (2 stable app_id with rotating fallback) ───
-
 type VKCredentials struct {
 	ClientID     string
 	ClientSecret string
@@ -30,6 +30,61 @@ type VKCredentials struct {
 var vkCredentialsList = []VKCredentials{
 	{ClientID: "6287487", ClientSecret: "MuAxFaKDYDOICzGnEOhp"},
 	{ClientID: "8202606", ClientSecret: "lMRsTiMCyPnp5vfoldmn"},
+}
+
+type CallUnavailableError struct {
+	Code    int
+	Message string
+}
+
+func (e *CallUnavailableError) Error() string {
+	if e == nil {
+		return "VK call is unavailable"
+	}
+	if e.Message != "" {
+		return fmt.Sprintf("VK returns error: %s (error_code=%d)", e.Message, e.Code)
+	}
+	return fmt.Sprintf("VK call is unavailable (error_code=%d)", e.Code)
+}
+
+func asCallUnavailableError(err error) (*CallUnavailableError, bool) {
+	var callErr *CallUnavailableError
+	if errors.As(err, &callErr) {
+		return callErr, true
+	}
+	return nil, false
+}
+
+func fatalCallError(resp map[string]interface{}) *CallUnavailableError {
+	errObj, ok := resp["error"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	code := vkErrorCode(errObj["error_code"])
+	switch {
+	case code == 951, code == 954:
+	case code >= 9000 && code <= 9999:
+	default:
+		return nil
+	}
+
+	msg, _ := errObj["error_msg"].(string)
+	return &CallUnavailableError{Code: code, Message: msg}
+}
+
+func vkErrorCode(raw interface{}) int {
+	switch v := raw.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
+	default:
+		return 0
+	}
 }
 
 const vkCredentialAttemptLimit = 4
@@ -260,6 +315,10 @@ func fetchVkCreds(ctx context.Context, link string, streamID int, deviceID strin
 		lastErr = err
 		log.Printf("[STREAM %d] [VK Auth] Failed with client_id=%s: %v", streamID, creds.ClientID, err)
 
+		if callErr, ok := asCallUnavailableError(err); ok {
+			return "", "", nil, callErr
+		}
+
 		if strings.Contains(err.Error(), "CAPTCHA_WAIT_REQUIRED") || strings.Contains(err.Error(), "FATAL_CAPTCHA") {
 			return "", "", nil, err
 		}
@@ -365,9 +424,12 @@ func getTokenChain(ctx context.Context, link string, streamID int, deviceID stri
 
 	// Step 2: getCallPreview (mimics real VK client behavior)
 	data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&fields=photo_200&access_token=%s", link, token1)
-	_, err = doRequest(data, "https://api.vk.ru/method/calls.getCallPreview?v=5.275&client_id="+creds.ClientID)
+	resp, err = doRequest(data, "https://api.vk.ru/method/calls.getCallPreview?v=5.275&client_id="+creds.ClientID)
 	if err != nil {
 		log.Printf("[STREAM %d] [VK Auth] Warning: getCallPreview failed: %v", streamID, err)
+	} else if callErr := fatalCallError(resp); callErr != nil {
+		log.Printf("[STREAM %d] [VK Auth] getCallPreview returned non-retryable call error: %v", streamID, callErr)
+		return "", "", nil, callErr
 	}
 
 	vkDelayRandom(200, 400)
@@ -387,6 +449,11 @@ func getTokenChain(ctx context.Context, link string, streamID int, deviceID stri
 		}
 
 		if errObj, hasErr := resp["error"].(map[string]interface{}); hasErr {
+			if callErr := fatalCallError(resp); callErr != nil {
+				log.Printf("[STREAM %d] [VK Auth] getAnonymousToken returned non-retryable call error: %v", streamID, callErr)
+				return "", "", nil, callErr
+			}
+
 			captchaErr := parseVkCaptchaError(errObj)
 			if captchaErr != nil && captchaErr.RedirectURI != "" && captchaErr.SessionToken != "" {
 				if attempt >= 3 {
@@ -502,10 +569,10 @@ func solveCaptchaBySelectedMode(
 ) (string, error) {
 	switch getCaptchaMode() {
 	case "wv":
-		log.Printf("[STREAM %d] [КАПЧА] WBV: режим из настроек Android (attempt %d)", streamID, attempt)
+		log.Printf("[STREAM %d] [CAPTCHA] WBV: mode from settings (attempt %d)", streamID, attempt)
 		return requestWebViewCaptcha(streamID, captchaErr, "selected", captchaSelectedWebViewTimeout, captchaResultChan, emitCaptchaRequest)
 	case "rjs":
-		log.Printf("[STREAM %d] [КАПЧА] RJS: Go v2 выбран в настройках (attempt %d)", streamID, attempt)
+		log.Printf("[STREAM %d] [CAPTCHA] RJS: Go v2 selected in settings (attempt %d)", streamID, attempt)
 		token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
 		if solveErr == nil {
 			return token, nil
@@ -513,22 +580,37 @@ func solveCaptchaBySelectedMode(
 		if ctx.Err() != nil {
 			return "", solveErr
 		}
-		log.Printf("[STREAM %d] [КАПЧА] RJS: ошибка, fallback на WBV Auto: %v", streamID, solveErr)
+		if isCaptchaSessionDead(solveErr) {
+			log.Printf("[STREAM %d] [CAPTCHA] RJS: session dead, requesting fresh challenge from VK", streamID)
+			return "", errCaptchaSessionExpired
+		}
+		if isCaptchaSessionExhausted(solveErr) {
+			log.Printf("[STREAM %d] [CAPTCHA] RJS: rate limit, fallback to WBV Auto", streamID)
+			return requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout, captchaResultChan, emitCaptchaRequest)
+		}
+		log.Printf("[STREAM %d] [CAPTCHA] RJS: error, fallback to WBV Auto: %v", streamID, solveErr)
 		return requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout, captchaResultChan, emitCaptchaRequest)
 	}
 
-	log.Printf("[STREAM %d] [КАПЧА] AUTO: старт цепочки (captcha attempt %d)", streamID, attempt)
+	log.Printf("[STREAM %d] [CAPTCHA] AUTO: start chain (captcha attempt %d)", streamID, attempt)
 
 	token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
 	if solveErr == nil {
-		log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 решил капчу", streamID)
+		log.Printf("[STREAM %d] [CAPTCHA] AUTO: Go v2 solved captcha", streamID)
 		return token, nil
 	}
 	if ctx.Err() != nil {
 		return "", solveErr
 	}
 	lastErr := solveErr
-	log.Printf("[STREAM %d] [КАПЧА] AUTO: Go v2 не решил за %d попыток: %v", streamID, captchaV2MaxAttempts, solveErr)
+	if isCaptchaSessionDead(solveErr) {
+		log.Printf("[STREAM %d] [CAPTCHA] AUTO: session dead, requesting fresh challenge from VK", streamID)
+		return "", errCaptchaSessionExpired
+	}
+	if errors.Is(solveErr, errCaptchaV2RateLimit) || strings.Contains(strings.ToLower(solveErr.Error()), "rate limit") {
+		log.Printf("[STREAM %d] [CAPTCHA] AUTO: rate limit on Go v2, trying WBV", streamID)
+	}
+	log.Printf("[STREAM %d] [CAPTCHA] AUTO: Go v2 failed after %d attempts: %v", streamID, captchaV2MaxAttempts, solveErr)
 
 	for wbvAttempt := 1; wbvAttempt <= 2; wbvAttempt++ {
 		log.Printf("[STREAM %d] [КАПЧА] AUTO: WBV Auto попытка %d/2 (timeout %s)", streamID, wbvAttempt, captchaAutoWebViewTimeout)
@@ -631,28 +713,129 @@ func GetCreds(ctx context.Context, link string, streamID int, deviceID string, c
 	return getVkCredsCached(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
 }
 
-// ─── DNS dialer setup ───
+func goDNSServersForPreset(preset string) []string {
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "cloudflare":
+		return []string{"1.1.1.1:53", "1.0.0.1:53"}
+	case "google":
+		return []string{"8.8.8.8:53", "8.8.4.4:53"}
+	default:
+		return []string{"77.88.8.8:53", "77.88.8.1:53"}
+	}
+}
 
-func setupGlobalResolver() {
+func isLoopbackDNSAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	host = strings.Trim(host, "[]")
+	return host == "127.0.0.1" || host == "::1" || host == "localhost" || host == "0.0.0.0"
+}
+
+func goDNSServersForArg(arg string) []string {
+	arg = strings.TrimSpace(arg)
+	if strings.HasPrefix(arg, "custom:") {
+		raw := strings.TrimPrefix(arg, "custom:")
+		var out []string
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if !strings.Contains(part, ":") {
+				part += ":53"
+			}
+			out = append(out, part)
+		}
+		if len(out) > 0 {
+			return out
+		}
+		return goDNSServersForPreset("yandex")
+	}
+	return goDNSServersForPreset(arg)
+}
+
+func goDNSLabel(arg string) string {
+	arg = strings.TrimSpace(arg)
+	if strings.HasPrefix(arg, "custom:") {
+		return "Custom DNS"
+	}
+	if strings.HasPrefix(arg, "doh:") {
+		return "Custom DoH"
+	}
+	switch strings.ToLower(arg) {
+	case "cloudflare":
+		return "Cloudflare"
+	case "google":
+		return "Google DNS"
+	case "doh-cloudflare":
+		return "Cloudflare DoH"
+	case "doh-google":
+		return "Google DoH"
+	case "doh-yandex":
+		return "Yandex DoH"
+	default:
+		return "Yandex DNS"
+	}
+}
+
+func formatGoDNSServers(servers []string) string {
+	parts := make([]string, 0, len(servers))
+	for _, s := range servers {
+		host, port, err := net.SplitHostPort(s)
+		if err != nil {
+			parts = append(parts, s)
+			continue
+		}
+		if port == "53" {
+			parts = append(parts, host)
+		} else {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func setupGlobalResolver(arg string) {
+	arg = strings.TrimSpace(arg)
+	original := arg
+	if arg == "" {
+		arg = "yandex"
+	}
+
+	if goDNSIsDoH(arg) {
+		endpoints := goDoHEndpointsForArg(arg)
+		setupDoHResolver(arg, endpoints)
+		return
+	}
+
+	knownPresets := map[string]bool{
+		"yandex":     true,
+		"cloudflare": true,
+		"google":     true,
+	}
+	isCustom := strings.HasPrefix(arg, "custom:")
+	normalized := strings.ToLower(arg)
+
+	if !knownPresets[normalized] && !isCustom && original != "" {
+		log.Printf("[CLIENT] DNS: unknown preset %q, using yandex as fallback", original)
+		arg = "yandex"
+	}
+
+	servers := goDNSServersForArg(arg)
+	log.Printf("[CLIENT] DNS for VK: %s (%s)", goDNSLabel(arg), formatGoDNSServers(servers))
+
 	dialer := &net.Dialer{
 		Timeout:   2 * time.Second,
 		KeepAlive: 30 * time.Second,
-	}
-	// Try multiple public DNS servers in order
-	dnsServers := []string{
-		"77.88.8.8:53",  // Яндекс
-		"77.88.8.1:53",  // Яндекс резерв
-		"8.8.8.8:53",    // Google
-		"1.1.1.1:53",    // Cloudflare
-		"9.9.9.9:53",    // Quad9
-		"208.67.222.222:53", // OpenDNS
 	}
 
 	net.DefaultResolver = &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			var lastErr error
-			for _, dns := range dnsServers {
+			for _, dns := range servers {
 				conn, err := dialer.DialContext(ctx, "udp", dns)
 				if err == nil {
 					return conn, nil
@@ -663,8 +846,7 @@ func setupGlobalResolver() {
 				}
 				lastErr = err
 			}
-			// Fallback to system DNS
-			if address != "" {
+			if address != "" && !isLoopbackDNSAddress(address) {
 				conn, err := dialer.DialContext(ctx, network, address)
 				if err == nil {
 					return conn, nil

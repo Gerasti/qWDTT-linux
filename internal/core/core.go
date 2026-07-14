@@ -12,16 +12,17 @@ import (
 
 // Config — все параметры запуска (профиль + runtime).
 type Config struct {
-	PeerAddr    string   // -peer
-	Password    string   // -password
-	Hashes      []string // -vk (уже распарсенные)
-	Listen      string   // -listen, default "127.0.0.1:9000"
-	TurnHost    string   // -turn
-	TurnPort    string   // -port
-	DeviceID    string   // -device-id
-	Workers     int      // -n
-	CaptchaMode string   // -captcha-mode
-	MTU         int      // 0 = default 1380
+	PeerAddr    string
+	Password    string
+	Hashes      []string
+	Listen      string
+	TurnHost    string
+	TurnPort    string
+	DeviceID    string
+	Workers     int
+	CaptchaMode string
+	MTU         int
+	DNS         string
 }
 
 // EventType — тип события от ядра.
@@ -120,7 +121,11 @@ func New(cfg Config) *Core {
 
 // Start запускает ядро. Возвращает канал событий (закрывается при завершении).
 func (c *Core) Start() (<-chan Event, error) {
-	setupGlobalResolver()
+	dnsArg := c.cfg.DNS
+	if dnsArg == "" {
+		dnsArg = "yandex"
+	}
+	setupGlobalResolver(dnsArg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
