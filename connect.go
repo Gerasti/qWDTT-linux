@@ -22,6 +22,7 @@ func connectCmd() {
 	autoSwitch := fs.Bool("auto-switch", false, "Auto-switch to other profiles on failure")
 	timeout := fs.Int("timeout", 120, "Connection timeout in seconds (for -auto-switch)")
 	dns := fs.String("dns", "yandex", "DNS resolver (yandex|cloudflare|google|doh-yandex|doh-cloudflare|doh-google|custom:IP:PORT|doh:https://...)")
+	captcha := fs.String("captcha", "auto", "Captcha bypass mode (auto|rjs)")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -111,7 +112,7 @@ func connectCmd() {
 					}
 				}
 
-				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *timeout, *autoSwitch, sigCh, stopCh)
+				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *captcha, *timeout, *autoSwitch, sigCh, stopCh)
 				if success {
 					return
 				}
@@ -147,7 +148,7 @@ func connectCmd() {
 	}
 }
 
-func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg string, timeoutSec int, autoSwitch bool, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
+func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg, captchaMode string, timeoutSec int, autoSwitch bool, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
@@ -169,7 +170,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 		TurnPort:    prof.TurnPort,
 		DeviceID:    deviceID,
 		Workers:     workers,
-		CaptchaMode: "rjs",
+		CaptchaMode: captchaMode,
 		MTU:         mtu,
 		DNS:         dnsArg,
 	}
@@ -334,9 +335,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 				} else if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
-						fmt.Printf("[!] Требуется капча (режим: %s)\n", parts[0])
-						fmt.Println("  CLI ещё не поддерживает интерактивное решение капчи")
-						fmt.Println("  Можете сделать issue на github.com/Gerasti/qWDTT-linux")
+						fmt.Printf("[!] Captcha required (mode: %s)\n", parts[0])
+						fmt.Println("  Automatic captcha solver failed")
+						fmt.Println("  The profile will be skipped (use -auto-switch to try other profiles)")
 					}
 					c.Stop()
 					if wgConfigured {

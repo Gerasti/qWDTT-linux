@@ -52,6 +52,7 @@ complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l workers -d "Numbe
 complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l mtu -d "Tunnel MTU"
 complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l hashes -d "VK hashes (comma-separated)"
 complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l dns -d "DNS resolver"
+complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l captcha -d "Captcha bypass mode" -a "auto rjs"
 complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l timeout -d "Connection timeout (seconds)"
 complete -c qwdtt-cli -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
 

@@ -334,7 +334,7 @@ func (c *Core) getCaptchaMode() string {
 
 func normalizeCaptchaMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "auto", "rjs", "wv":
+	case "auto", "rjs":
 		return strings.ToLower(strings.TrimSpace(mode))
 	default:
 		return "auto"

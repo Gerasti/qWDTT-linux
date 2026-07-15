@@ -47,7 +47,9 @@ _qwdtt_cli_completions() {
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
                 COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -timeout -auto-switch" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch" -- "$cur") )
+            elif [[ $prev == "-captcha" ]]; then
+                COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
             fi
             ;;
         show|remove)

@@ -47,7 +47,6 @@ func addCmd() {
 		Hashes:   link.Hashes,
 		Listen:   "127.0.0.1:9000",
 		DeviceID: devID,
-		Enabled:  true,
 	}
 
 	if err := saveProfile(name, prof); err != nil {
@@ -69,6 +68,11 @@ func editCmd() {
 	}
 
 	name := os.Args[2]
+
+	// Prevent editing read-only profiles
+	if strings.HasPrefix(name, "ro-") {
+		log.Fatalf("Cannot edit read-only profile '%s'. Read-only profiles can only be enabled/disabled.", name)
+	}
 
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	peer := fs.String("peer", "", "Адрес сервера (IP:PORT)")
@@ -148,6 +152,12 @@ func removeCmd() {
 	}
 
 	name := os.Args[2]
+
+	// Prevent removing read-only profiles
+	if strings.HasPrefix(name, "ro-") {
+		log.Fatalf("Cannot remove read-only profile '%s'. Read-only profiles are managed by system configuration.", name)
+	}
+
 	if err := os.Remove(profilePath(name)); err != nil {
 		log.Fatalf("Ошибка удаления профиля: %v", err)
 	}
@@ -156,21 +166,6 @@ func removeCmd() {
 }
 
 func listCmd() {
-	dir := profilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Нет сохранённых профилей")
-			return
-		}
-		log.Fatalf("Ошибка чтения профилей: %v", err)
-	}
-
-	if len(entries) == 0 {
-		fmt.Println("Нет сохранённых профилей")
-		return
-	}
-
 	type profileInfo struct {
 		name     string
 		peer     string
@@ -178,59 +173,119 @@ func listCmd() {
 		status   string
 		priority int
 		active   bool
+		readOnly bool
 	}
 
-	var profiles []profileInfo
+	var regularProfiles []profileInfo
+	var readOnlyProfiles []profileInfo
 	maxNameLen := 0
 	maxPeerLen := 0
 
 	activeProfile := getActiveProfile()
 
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		prof, err := loadProfile(name)
+	// ANSI color codes
+	const (
+		colorReset = "\033[0m"
+		colorGreen = "\033[32m"
+		colorRed   = "\033[31m"
+	)
+
+	// Read profiles from both directories
+	readProfilesFromDir := func(dir string, isReadOnly bool) {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue
-		}
-		status := "enabled"
-		if !prof.Enabled {
-			status = "disabled"
+			if os.IsNotExist(err) {
+				return
+			}
+			log.Fatalf("Ошибка чтения профилей: %v", err)
 		}
 
-		profiles = append(profiles, profileInfo{
-			name:     name,
-			peer:     prof.PeerAddr,
-			hashes:   len(prof.Hashes),
-			status:   status,
-			priority: prof.Priority,
-			active:   name == activeProfile,
-		})
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			prof, err := loadProfile(name)
+			if err != nil {
+				continue
+			}
 
-		if len(name) > maxNameLen {
-			maxNameLen = len(name)
-		}
-		if len(prof.PeerAddr) > maxPeerLen {
-			maxPeerLen = len(prof.PeerAddr)
+			// Get status from status.json
+			enabled := isProfileEnabled(name)
+			status := "enabled"
+			if !enabled {
+				status = "disabled"
+			}
+
+			info := profileInfo{
+				name:     name,
+				peer:     prof.PeerAddr,
+				hashes:   len(prof.Hashes),
+				status:   status,
+				priority: prof.Priority,
+				active:   name == activeProfile,
+				readOnly: isReadOnly,
+			}
+
+			if isReadOnly {
+				readOnlyProfiles = append(readOnlyProfiles, info)
+			} else {
+				regularProfiles = append(regularProfiles, info)
+			}
+
+			if len(name) > maxNameLen {
+				maxNameLen = len(name)
+			}
+			if len(prof.PeerAddr) > maxPeerLen {
+				maxPeerLen = len(prof.PeerAddr)
+			}
 		}
 	}
 
-	fmt.Println("Профили:")
-	for _, p := range profiles {
-		activeMarker := " "
-		if p.active {
-			activeMarker = "*"
-		}
-		fmt.Printf(" %s %-*s  %-*s  %d хешей  [%-8s]  priority: %d\n",
-			activeMarker,
-			maxNameLen, p.name,
-			maxPeerLen, p.peer,
-			p.hashes,
-			p.status,
-			p.priority)
+	// Read regular profiles
+	readProfilesFromDir(filepath.Join(configDir(), "profiles"), false)
+
+	// Read read-only profiles
+	readProfilesFromDir(filepath.Join(configDir(), "ro-profiles"), true)
+
+	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 {
+		fmt.Println("Нет сохранённых профилей")
+		return
 	}
+
+	printProfiles := func(profiles []profileInfo, title string) {
+		if len(profiles) == 0 {
+			return
+		}
+		fmt.Printf("\n%s:\n", title)
+		for _, p := range profiles {
+			activeMarker := " "
+			if p.active {
+				activeMarker = "*"
+			}
+
+			// Pad status to fixed width BEFORE coloring
+			paddedStatus := fmt.Sprintf("%-8s", p.status)
+
+			// Color the padded status
+			statusColor := colorGreen
+			if p.status == "disabled" {
+				statusColor = colorRed
+			}
+			coloredStatus := statusColor + paddedStatus + colorReset
+
+			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %d\n",
+				activeMarker,
+				maxNameLen, p.name,
+				maxPeerLen, p.peer,
+				p.hashes,
+				coloredStatus,
+				p.priority)
+		}
+	}
+
+	printProfiles(regularProfiles, "Профили")
+	printProfiles(readOnlyProfiles, "Read-only профили")
 }
 
 func showCmd() {
@@ -245,7 +300,11 @@ func showCmd() {
 		log.Fatalf("Ошибка загрузки профиля: %v", err)
 	}
 
-	fmt.Printf("Профиль: %s\n", name)
+	fmt.Printf("Профиль: %s", name)
+	if strings.HasPrefix(name, "ro-") {
+		fmt.Printf(" [read-only]")
+	}
+	fmt.Println()
 	fmt.Printf("  Peer: %s\n", prof.PeerAddr)
 	fmt.Printf("  Password: %s\n", maskPassword(prof.Password))
 	fmt.Printf("  Listen: %s\n", prof.Listen)
@@ -255,8 +314,11 @@ func showCmd() {
 	if prof.DeviceID != "" {
 		fmt.Printf("  Device ID: %s\n", prof.DeviceID)
 	}
+
+	// Get status from status.json
+	enabled := isProfileEnabled(name)
 	status := "enabled"
-	if !prof.Enabled {
+	if !enabled {
 		status = "disabled"
 	}
 	fmt.Printf("  Status: %s\n", status)
@@ -297,19 +359,20 @@ func enableCmd() {
 	}
 
 	name := os.Args[2]
-	prof, err := loadProfile(name)
+
+	// Check if profile exists
+	_, err := loadProfile(name)
 	if err != nil {
 		log.Fatalf("Ошибка загрузки профиля: %v", err)
 	}
 
-	if prof.Enabled {
+	if isProfileEnabled(name) {
 		fmt.Printf("[*] Профиль '%s' уже включен\n", name)
 		return
 	}
 
-	prof.Enabled = true
-	if err := saveProfile(name, *prof); err != nil {
-		log.Fatalf("Ошибка сохранения профиля: %v", err)
+	if err := setProfileEnabled(name, true); err != nil {
+		log.Fatalf("Ошибка изменения статуса: %v", err)
 	}
 
 	fmt.Printf("[OK] Профиль '%s' включен\n", name)
@@ -322,19 +385,20 @@ func disableCmd() {
 	}
 
 	name := os.Args[2]
-	prof, err := loadProfile(name)
+
+	// Check if profile exists
+	_, err := loadProfile(name)
 	if err != nil {
 		log.Fatalf("Ошибка загрузки профиля: %v", err)
 	}
 
-	if !prof.Enabled {
+	if !isProfileEnabled(name) {
 		fmt.Printf("[*] Профиль '%s' уже отключен\n", name)
 		return
 	}
 
-	prof.Enabled = false
-	if err := saveProfile(name, *prof); err != nil {
-		log.Fatalf("Ошибка сохранения профиля: %v", err)
+	if err := setProfileEnabled(name, false); err != nil {
+		log.Fatalf("Ошибка изменения статуса: %v", err)
 	}
 
 	fmt.Printf("[OK] Профиль '%s' отключен\n", name)
@@ -389,34 +453,40 @@ func profilesDir() string {
 }
 
 func listProfileNames() []string {
-	dir := profilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
 	type profileWithPriority struct {
 		name     string
 		priority int
 	}
 
 	var profiles []profileWithPriority
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		prof, err := loadProfile(name)
+
+	// Read from both directories
+	readFromDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue
+			return
 		}
-		if prof.Enabled {
-			profiles = append(profiles, profileWithPriority{
-				name:     name,
-				priority: prof.Priority,
-			})
+
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			prof, err := loadProfile(name)
+			if err != nil {
+				continue
+			}
+			if isProfileEnabled(name) {
+				profiles = append(profiles, profileWithPriority{
+					name:     name,
+					priority: prof.Priority,
+				})
+			}
 		}
 	}
+
+	readFromDir(filepath.Join(configDir(), "profiles"))
+	readFromDir(filepath.Join(configDir(), "ro-profiles"))
 
 	sort.Slice(profiles, func(i, j int) bool {
 		return profiles[i].priority > profiles[j].priority
@@ -430,43 +500,51 @@ func listProfileNames() []string {
 }
 
 func listAllProfileNames() []string {
-	dir := profilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+	var names []string
+
+	readFromDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+		}
 	}
 
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
-	}
+	readFromDir(filepath.Join(configDir(), "profiles"))
+	readFromDir(filepath.Join(configDir(), "ro-profiles"))
+
 	return names
 }
 
 func listDisabledProfileNames() []string {
-	dir := profilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+	var names []string
+
+	readFromDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			if !isProfileEnabled(name) {
+				names = append(names, name)
+			}
+		}
 	}
 
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		prof, err := loadProfile(name)
-		if err != nil {
-			continue
-		}
-		if !prof.Enabled {
-			names = append(names, name)
-		}
-	}
+	readFromDir(filepath.Join(configDir(), "profiles"))
+	readFromDir(filepath.Join(configDir(), "ro-profiles"))
+
 	return names
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -22,38 +23,38 @@ func formatBytes(b int64) string {
 }
 
 func selectProfileInteractive() string {
-	dir := profilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintln(os.Stderr, "Нет сохранённых профилей")
-			fmt.Fprintln(os.Stderr, "Используйте: qwdtt-cli add <name> <wdtt://...>")
-			return ""
-		}
-		fmt.Fprintf(os.Stderr, "Ошибка чтения профилей: %v\n", err)
-		return ""
-	}
-
 	type profileEntry struct {
 		name string
 		peer string
 	}
 
 	var profiles []profileEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		prof, err := loadProfile(name)
+
+	// Read from both directories
+	readFromDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue
+			return
 		}
-		if !prof.Enabled {
-			continue
+
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			prof, err := loadProfile(name)
+			if err != nil {
+				continue
+			}
+			if !isProfileEnabled(name) {
+				continue
+			}
+			profiles = append(profiles, profileEntry{name: name, peer: prof.PeerAddr})
 		}
-		profiles = append(profiles, profileEntry{name: name, peer: prof.PeerAddr})
 	}
+
+	readFromDir(profilesDir())
+	readFromDir(filepath.Join(configDir(), "ro-profiles"))
 
 	if len(profiles) == 0 {
 		fmt.Fprintln(os.Stderr, "Нет включенных профилей")
