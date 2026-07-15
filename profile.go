@@ -17,6 +17,7 @@ type ProfileData struct {
 	TurnPort string   `json:"port,omitempty"`
 	DeviceID string   `json:"device_id,omitempty"`
 	Priority int      `json:"priority,omitempty"`
+	LinkFile string   `json:"link_file,omitempty"` // Path to file containing wdtt:// URL
 }
 
 func profilePath(name string) string {
@@ -82,6 +83,31 @@ func loadProfile(name string) (*ProfileData, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("профиль %q parse: %w", name, err)
 	}
+
+	// Clean password: trim whitespace and remove literal \n sequences
+	p.Password = strings.TrimSpace(p.Password)
+	p.Password = strings.ReplaceAll(p.Password, "\\n", "")
+	p.Password = strings.ReplaceAll(p.Password, "\n", "")
+	p.Password = strings.ReplaceAll(p.Password, "\r", "")
+
+	// If peer/password are empty but LinkFile is set, read and parse the link file
+	if (p.PeerAddr == "" || p.Password == "") && p.LinkFile != "" {
+		linkData, err := os.ReadFile(p.LinkFile)
+		if err != nil {
+			return nil, fmt.Errorf("профиль %q: не удалось прочитать link_file %q: %w", name, p.LinkFile, err)
+		}
+
+		link, err := parseWdttURL(strings.TrimSpace(string(linkData)))
+		if err != nil {
+			return nil, fmt.Errorf("профиль %q: не удалось распарсить link_file %q: %w", name, p.LinkFile, err)
+		}
+
+		// Populate fields from parsed link
+		p.PeerAddr = link.IP + ":" + link.DTLSPort
+		p.Password = link.Password
+		p.Hashes = link.Hashes
+	}
+
 	return &p, nil
 }
 
