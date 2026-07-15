@@ -1,4 +1,4 @@
-# qWDTT CLI
+# qWDTT CLI v0.5.0
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
 
@@ -8,6 +8,10 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - Управление профилями с приоритетами
 - Auto-switch - переключение между профилями при сбоях
 - Автоматическое переподключение после suspend/resume
+- Read-only профили через NixOS конфигурацию (с поддержкой sops-nix)
+- DNS resolvers: Yandex, Cloudflare, Google (UDP и DoH)
+- Оптимизация CPU клиентского ядра
+- Debug режим для мониторинга соединения
 
 ## Установка
 
@@ -32,12 +36,40 @@ in
     enable = true;
     # package = pkgs.qwdtt-cli;  # override package if needed
     deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
+
+    users = [ "alice" ];
+
+    profiles = {
+    # read-only profiles can only be enabled/disabled
+      work = {
+        link = config.sops.secrets.work-server.path; # (path or string)
+        priority = 100;
+      };
+      home = {
+        link = config.sops.secrets.home-server.path;
+      };
+      backup1 = {
+        link = config.sops.secrets.backup1.path;
+      };
+      backup2 = {
+        link = config.sops.secrets.backup2.path;
+      };
+      mobile = {
+        link = config.sops.secrets.mobile-server.path;
+        deviceId = config.sops.secrets.wdtt-id-mobile.path;
+      };
+      guest = {
+        link = config.sops.secrets.guest-server.path;
+        deviceId = config.sops.secrets.wdtt-id-guest.path;
+      };
+    };
+
+    enableBashIntegration = true;
+    enableFishIntegration = true;
     wrappers = {
       enable = true;  # create security wrappers with capabilities (allows running without sudo)
       # group = "users";  # group that can execute wrapped binaries
     };
-    enableBashIntegration = true;  # enable bash completion
-    enableFishIntegration = true;  # enable fish completion
   };
 }
 ```
@@ -121,6 +153,18 @@ qwdtt-cli con myserver
 # Auto-switch режим
 qwdtt-cli con -auto-switch
 
+# С кастомным DNS resolver
+qwdtt-cli con myserver -dns doh-cloudflare
+qwdtt-cli con myserver -dns custom:8.8.8.8:53,1.1.1.1:53
+qwdtt-cli con myserver -dns doh:https://dns.example.com/dns-query
+
+# Debug информация о подключении
+qwdtt-cli debug
+# или watch -n 1 qwdtt-cli debug
+
+# Отключиться
+qwdtt-cli disconnect
+
 # Управление
 qwdtt-cli ls                    # список
 qwdtt-cli edit myserver -priority 100
@@ -131,6 +175,8 @@ qwdtt-cli disable myserver
 
 ```
 qwdtt-cli connect <profile> [флаги]  - Подключиться к VPN
+qwdtt-cli disconnect                 - Отключиться от VPN
+qwdtt-cli debug                      - Показать debug информацию о соединении
 qwdtt-cli add <name> <wdtt://...>    - Добавить профиль
 qwdtt-cli edit <name> [флаги]        - Редактировать профиль
 qwdtt-cli remove <name>              - Удалить профиль
@@ -146,19 +192,30 @@ qwdtt-cli version                    - Версия
 ### Короткие алиасы
 
 ```
-con  - connect
-sh   - show
-ls   - list
-rm   - remove
-id   - device-id
+con    - connect
+discon - disconnect
+sh     - show
+ls     - list
+rm     - remove
+id     - device-id
+en     - enable
+dis    - disable
 ```
 
 ## Флаги connect
 
 - `-auto-switch` - переключение между профилями при сбоях
-- `-workers N` - количество воркеров (default: 9)
-- `-mtu N` - MTU (default: 1280)
+- `-workers N` - количество воркеров (кратно 9, default: 9)
+- `-mtu N` - MTU туннеля (default: 1280, max: 1500)
 - `-timeout N` - таймаут для auto-switch (default: 120)
+- `-hashes H1,H2` - переопределить VK-хеши профиля
+- `-dns RESOLVER` - DNS resolver (default: yandex)
+  - Опции: `yandex`, `cloudflare`, `google`
+  - DoH: `doh-yandex`, `doh-cloudflare`, `doh-google`
+  - Кастомный UDP: `custom:8.8.8.8:53,1.1.1.1:53`
+  - Кастомный DoH: `doh:https://dns.example.com/dns-query`
+- `-captcha MODE` - режим обхода captcha (default: auto)
+  - Опции: `auto`, `rjs`
 
 ## Флаги edit
 
@@ -181,6 +238,32 @@ id   - device-id
 - Не используются в `-auto-switch`
 - Можно подключиться явно: `qwdtt-cli con disabled-profile`
 
+**Read-only профили (NixOS):**
+- Управляются через NixOS конфигурацию
+- Имена с префиксом `ro-` (например, `ro-work`)
+- Нельзя редактировать или удалить через CLI
+- Можно включать/отключать: `qwdtt-cli enable ro-work`
+- Поддержка sops-nix для секретов (device_id, wdtt:// ссылки)
+- Автоматически создаются для указанных пользователей
+
+## DNS Resolvers
+
+Поддерживаются следующие DNS resolvers:
+
+**Стандартные UDP:**
+- `yandex` (default) - 77.88.8.8, 77.88.8.1
+- `cloudflare` - 1.1.1.1, 1.0.0.1
+- `google` - 8.8.8.8, 8.8.4.4
+- `custom:IP:PORT,IP:PORT` - кастомные UDP серверы
+
+**DNS-over-HTTPS (DoH):**
+- `doh-yandex` - https://common.dot.dns.yandex.net/dns-query
+- `doh-cloudflare` - https://cloudflare-dns.com/dns-query
+- `doh-google` - https://dns.google/dns-query
+- `doh:https://...` - кастомный DoH endpoint
+
+Пример: `qwdtt-cli con myserver -dns doh-cloudflare`
+
 ## Suspend/Resume
 
 Автоматическое переподключение после пробуждения через systemd D-Bus. Работает без настройки на системах с systemd.
@@ -196,22 +279,20 @@ id   - device-id
 
 ```
 .
-├── cli.go               # Точка входа
-├── connect.go           # Логика подключения
-├── commands.go          # Команды управления профилями
-├── profile.go           # Работа с профилями
-├── config.go            # Конфигурация и Device ID
-├── utils.go             # Вспомогательные функции
-├── suspend.go           # Мониторинг suspend/resume
-├── url_parser.go        # Парсинг wdtt:// URL
-├── wireguard_linux.go   # WireGuard интеграция
-├── go_client/           # Core библиотека (TURN, DTLS)
-│   └── core/
-├── vendor/              # Vendored dependencies
-├── modules/nixos/       # NixOS module
-├── completions/         # Bash/Fish автодополнение
-├── flake.nix            # Nix flake конфигурация
-└── go.mod               # Go dependencies
+├── cli.go                # Точка входа
+├── connect.go            # Логика подключения
+├── commands.go           # Команды управления профилями
+├── profile.go            # Работа с профилями
+├── config.go             # Конфигурация и Device ID
+├── utils.go              # Вспомогательные функции
+├── suspend.go            # Мониторинг suspend/resume
+├── url_parser.go         # Парсинг wdtt:// URL
+├── wireguard_linux.go    # WireGuard интеграция
+├── internal/core/        # Core библиотека (TURN, DTLS, DoH)
+├── modules/nixos/        # NixOS module
+├── completions/          # Bash/Fish автодополнение
+├── flake.nix             # Nix flake конфигурация
+└── go.mod                # Go dependencies
 ```
 
 ## Лицензия

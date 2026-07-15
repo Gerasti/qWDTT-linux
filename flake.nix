@@ -28,7 +28,7 @@
         qwdtt-cli = final.callPackage ({ buildGoModule, lib }:
           buildGoModule {
             pname = "qwdtt-cli";
-            version = "0.0.2";
+            version = "0.5.0";
 
             src = ./.;
             vendorHash = null;

@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const version = "0.0.2"
+const version = "0.5.0"
 
 func printUsage() {
 	fmt.Printf(`qwdtt-cli v%s - VPN client via VK TURN servers
