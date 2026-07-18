@@ -1,6 +1,3 @@
-# ===== Go =====
-go.sum
-
 # ===== Native Libraries (compiled) =====
 *.so
 *.dll
