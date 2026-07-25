@@ -162,8 +162,8 @@ func WorkerGroup(
 	for i, wid := range workerIDs {
 		wg.Add(1)
 
-		// Stagger: 200мс между воркерами
-		workerDelay := time.Duration(i) * 200 * time.Millisecond
+		// Stagger: 500мс между воркерами
+		workerDelay := time.Duration(i) * 500 * time.Millisecond
 
 		go func(wid int, delay time.Duration) {
 			defer wg.Done()
