@@ -179,7 +179,7 @@ func RunSession(
 	var obfsCfg *ObfsConfig
 	var obfsWriteState *ObfsState
 	if useWrap {
-		obfsCfg = NewObfsConfig()
+		obfsCfg = NewObfsConfig("audio")
 		obfsWriteState = NewObfsState()
 	}
 

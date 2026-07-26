@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -10,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"qwdtt-cli/internal/core"
+	"qwdtt/internal/core"
 )
 func connectCmd() {
 	var profileName string
@@ -219,6 +220,18 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	var coreInstance *core.Core
 	coreInstance = c
 
+	// stdin reader for CAPTCHA_RESULT protocol
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "CAPTCHA_RESULT|") {
+				result := strings.TrimPrefix(line, "CAPTCHA_RESULT|")
+				coreInstance.SolveCaptcha(result)
+			}
+		}
+	}()
+
 	var timeout *time.Timer
 	if autoSwitch {
 		timeout = time.NewTimer(time.Duration(timeoutSec) * time.Second)
@@ -336,15 +349,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
 						fmt.Printf("[!] Captcha required (mode: %s)\n", parts[0])
-						fmt.Println("  Automatic captcha solver failed")
-						fmt.Println("  The profile will be skipped (use -auto-switch to try other profiles)")
 					}
-					c.Stop()
-					if wgConfigured {
-						teardownWG()
-					}
-					clearActiveProfile()
-					return false, false
 				}
 			case core.EventStats:
 				if connected && wgTested && ev.RxBytes > 0 {

@@ -20,14 +20,14 @@ func addCmd() {
 	fs.Parse(os.Args[3:])
 
 	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli add <name> <wdtt://...> [-device-id ID]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt add <name> <wdtt://...> [-device-id ID]\n")
 		os.Exit(1)
 	}
 
 	name := os.Args[2]
 	url := fs.Arg(0)
 	if url == "" {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli add <name> <wdtt://...> [-device-id ID]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt add <name> <wdtt://...> [-device-id ID]\n")
 		os.Exit(1)
 	}
 
@@ -63,7 +63,7 @@ func addCmd() {
 
 func editCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli edit <name> [флаги]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt edit <name> [флаги]\n")
 		os.Exit(1)
 	}
 
@@ -147,7 +147,7 @@ func editCmd() {
 
 func removeCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli remove <name>\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt remove <name>\n")
 		os.Exit(1)
 	}
 
@@ -290,7 +290,7 @@ func listCmd() {
 
 func showCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli show <name>\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt show <name>\n")
 		os.Exit(1)
 	}
 
@@ -354,7 +354,7 @@ func regenerateIDCmd() {
 
 func enableCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli enable <name>\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name>\n")
 		os.Exit(1)
 	}
 
@@ -380,7 +380,7 @@ func enableCmd() {
 
 func disableCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt-cli disable <name>\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name>\n")
 		os.Exit(1)
 	}
 
@@ -414,7 +414,7 @@ func deviceIDCmd() {
 			}
 		}
 		fmt.Println("Device ID не установлен")
-		fmt.Println("Использование: qwdtt-cli device-id <16-символьный-hex-ID>")
+		fmt.Println("Использование: qwdtt device-id <16-символьный-hex-ID>")
 		os.Exit(1)
 	}
 
@@ -557,7 +557,7 @@ func disconnectCmd() {
 
 	fmt.Printf("[*] Отключение профиля '%s'...\n", activeProfile)
 
-	cmd := exec.Command("pgrep", "-f", "qwdtt-cli")
+	cmd := exec.Command("pgrep", "-f", "qwdtt")
 	output, err := cmd.Output()
 	if err == nil {
 		pids := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -569,7 +569,7 @@ func disconnectCmd() {
 				continue
 			}
 
-			fmt.Printf("[*] Завершение процесса qwdtt-cli (PID: %s)...\n", pid)
+			fmt.Printf("[*] Завершение процесса qwdtt (PID: %s)...\n", pid)
 			killCmd := exec.Command("kill", "-INT", pid)
 			killCmd.Run()
 		}
@@ -633,7 +633,7 @@ func debugCmd() {
 		fmt.Printf("Input/Output: [ERROR] %v\n\n", err)
 	}
 
-	fmt.Printf("Использование ресурсов (qwdtt-cli):\n")
+	fmt.Printf("Использование ресурсов (qwdtt):\n")
 	if usage, err := getProcessUsage(); err == nil {
 		fmt.Printf("  CPU: %.1f%%\n", usage.CPU)
 		fmt.Printf("  RAM: %s\n", formatBytes(usage.Memory))

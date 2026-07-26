@@ -58,8 +58,8 @@ func selectProfileInteractive() string {
 
 	if len(profiles) == 0 {
 		fmt.Fprintln(os.Stderr, "Нет включенных профилей")
-		fmt.Fprintln(os.Stderr, "Используйте: qwdtt-cli add <name> <wdtt://...>")
-		fmt.Fprintln(os.Stderr, "Или: qwdtt-cli enable <name>")
+		fmt.Fprintln(os.Stderr, "Используйте: qwdtt add <name> <wdtt://...>")
+		fmt.Fprintln(os.Stderr, "Или: qwdtt enable <name>")
 		return ""
 	}
 
@@ -131,7 +131,7 @@ type ProcessUsage struct {
 func getProcessUsage() (*ProcessUsage, error) {
 	selfPID := os.Getpid()
 
-	cmd := exec.Command("pgrep", "-f", "qwdtt-cli")
+	cmd := exec.Command("pgrep", "-f", "qwdtt")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("process not found")

@@ -28,7 +28,7 @@ import (
 
 const (
 	captchaV2APIVersion    = "5.131"
-	captchaV2ScriptVersion = "1.1.1370"
+	captchaV2ScriptVersion = "1.1.1384"
 	captchaV2DeviceInfo    = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1040,"innerWidth":1920,"innerHeight":970,"devicePixelRatio":1,"language":"ru-RU","languages":["ru-RU","ru","en-US","en"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"default"}`
 )
 

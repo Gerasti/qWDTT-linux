@@ -8,9 +8,9 @@ import (
 const version = "0.5.0"
 
 func printUsage() {
-	fmt.Printf(`qwdtt-cli v%s - VPN client via VK TURN servers
+	fmt.Printf(`qwdtt v%s - VPN client via VK TURN servers
 
-Usage:  qwdtt-cli [OPTIONS] COMMAND
+Usage:  qwdtt [OPTIONS] COMMAND
 
 Profile Management:
   add <name> <wdtt://...>     Add a new profile
@@ -27,7 +27,7 @@ Connection:
                               Disabled profiles can be used by explicitly specifying name
   disconnect                  Disconnect from VPN (alias: discon)
   debug                       Show debug information about current connection
-                              (e.g., watch -n 1 qwdtt-cli debug)
+                              (e.g., watch -n 1 qwdtt debug)
 
 Device ID Management:
   device-id [id]              Show or set Device ID (alias: id)
@@ -47,9 +47,10 @@ Connect Flags:
                               custom:8.8.8.8:53,1.1.1.1:53
                               doh:https://dns.example.com/dns-query
   -captcha MODE               Captcha bypass mode (default: auto)
-                              Options: auto, rjs
-                              auto - automatic mode (pure Go solver with retries)
-                              rjs  - pure Go solver only
+                               Options: auto, rjs, wv
+                               auto - Go solver with WebView fallback
+                               rjs  - pure Go solver only
+                               wv   - external WebView solver (via CAPTCHA_SOLVE protocol)
   -auto-switch                Auto-switch to other profiles on failure
                               (uses enabled profiles only)
   -timeout N                  Timeout for -auto-switch in seconds (default: 120)
@@ -63,20 +64,20 @@ Edit Flags:
   -priority N                 Set profile priority (higher = earlier with -auto-switch)
 
 Examples:
-  qwdtt-cli add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
-  qwdtt-cli con                        # interactive profile selection
-  qwdtt-cli con myserver               # connect to profile
-  qwdtt-cli con myserver -captcha rjs  # connect with pure Go captcha solver
-  qwdtt-cli con myserver -auto-switch  # with auto-switching on failure
-  qwdtt-cli debug                      # show current connection stats
-  qwdtt-cli discon                     # disconnect from VPN
-  qwdtt-cli dis myserver               # disable profile (alias for disable)
-  qwdtt-cli con disabled-profile       # can connect by explicitly specifying name
-  qwdtt-cli en myserver                # enable profile (alias for enable)
-  qwdtt-cli edit myserver -password newpass
-  qwdtt-cli edit myserver -priority 100  # set high priority
-  qwdtt-cli ls
-  qwdtt-cli sh myserver
+  qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
+  qwdtt con                        # interactive profile selection
+  qwdtt con myserver               # connect to profile
+  qwdtt con myserver -captcha rjs  # connect with pure Go captcha solver
+  qwdtt con myserver -auto-switch  # with auto-switching on failure
+  qwdtt debug                      # show current connection stats
+  qwdtt discon                     # disconnect from VPN
+  qwdtt dis myserver               # disable profile (alias for disable)
+  qwdtt con disabled-profile       # can connect by explicitly specifying name
+  qwdtt en myserver                # enable profile (alias for enable)
+  qwdtt edit myserver -password newpass
+  qwdtt edit myserver -priority 100  # set high priority
+  qwdtt ls
+  qwdtt sh myserver
 `, version)
 }
 
@@ -113,7 +114,7 @@ func main() {
 	case "regenerate-id":
 		regenerateIDCmd()
 	case "version", "--version":
-		fmt.Printf("qwdtt-cli v%s\n", version)
+		fmt.Printf("qwdtt v%s\n", version)
 	case "help", "-h", "--help":
 		printUsage()
 	case "__complete_enabled":

@@ -10,6 +10,8 @@ import (
 
 const wgIface = "wg-qwdtt"
 
+var routedTurnIPs []string
+
 
 // wg-quick-only fields that wg setconf doesn't understand
 var wgQuickOnlyFields = map[string]bool{
@@ -109,9 +111,10 @@ func applyWGConfig(config string, turnIPs []string) error {
 	gateway := strings.TrimSpace(string(gatewayOut))
 
 	if gateway != "" && err == nil {
+		routedTurnIPs = turnIPs
 		for _, turnIP := range turnIPs {
 			if turnIP != "" {
-				cmd = exec.Command("ip", "route", "add", turnIP, "via", gateway)
+				cmd = exec.Command("ip", "route", "replace", turnIP, "via", gateway)
 				if err := cmd.Run(); err != nil {
 					fmt.Printf("Info: route for %s: %v\n", turnIP, err)
 				}
@@ -130,6 +133,10 @@ func applyWGConfig(config string, turnIPs []string) error {
 }
 
 func teardownWG() error {
+	for _, ip := range routedTurnIPs {
+		exec.Command("ip", "route", "del", ip).Run()
+	}
+	routedTurnIPs = nil
 	cmd := exec.Command("ip", "link", "del", wgIface)
 	if err := cmd.Run(); err != nil {
 		return nil

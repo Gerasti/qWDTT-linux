@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Bash completion for qwdtt-cli
+# Bash completion for qwdtt
 
-_qwdtt_cli_completions() {
+_qwdtt_completions() {
     local cur prev opts profiles
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -10,7 +10,7 @@ _qwdtt_cli_completions() {
     # Get profile names from config directory
     local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/qwdtt/profiles"
     if [[ -d "$config_dir" ]]; then
-        profiles=$(qwdtt-cli __complete_enabled 2>/dev/null)
+        profiles=$(qwdtt __complete_enabled 2>/dev/null)
     fi
 
     # Complete main command - show only primary commands, no aliases
@@ -54,13 +54,13 @@ _qwdtt_cli_completions() {
             ;;
         show|remove)
             if [[ $COMP_CWORD -eq 2 ]]; then
-                local all_profiles=$(qwdtt-cli __complete_all 2>/dev/null)
+                local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             fi
             ;;
         enable)
             if [[ $COMP_CWORD -eq 2 ]]; then
-                local disabled_profiles=$(qwdtt-cli __complete_disabled 2>/dev/null)
+                local disabled_profiles=$(qwdtt __complete_disabled 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$disabled_profiles" -- "$cur") )
             fi
             ;;
@@ -71,7 +71,7 @@ _qwdtt_cli_completions() {
             ;;
         edit)
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
-                local all_profiles=$(qwdtt-cli __complete_all 2>/dev/null)
+                local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
                 COMPREPLY=( $(compgen -W "-peer -password -hashes -device-id -listen -priority" -- "$cur") )
@@ -96,4 +96,4 @@ _qwdtt_cli_completions() {
     return 0
 }
 
-complete -F _qwdtt_cli_completions qwdtt-cli
+complete -F _qwdtt_completions qwdtt

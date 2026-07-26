@@ -8,10 +8,10 @@
 with lib;
 
 let
-  cfg = config.services.qwdtt-cli;
+  cfg = config.services.qwdtt;
 
   qwdtt-package = pkgs.buildGoModule {
-    pname = "qwdtt-cli";
+    pname = "qwdtt";
     version = "0.5.0";
 
     src = ./../..;
@@ -22,10 +22,10 @@ let
 
     postInstall = ''
       mkdir -p $out/share/bash-completion/completions
-      cp $src/completions/qwdtt-cli.bash $out/share/bash-completion/completions/qwdtt-cli
+      cp $src/completions/qwdtt.bash $out/share/bash-completion/completions/qwdtt
 
       mkdir -p $out/share/fish/vendor_completions.d
-      cp $src/completions/qwdtt-cli.fish $out/share/fish/vendor_completions.d/qwdtt-cli.fish
+      cp $src/completions/qwdtt.fish $out/share/fish/vendor_completions.d/qwdtt.fish
     '';
 
     meta = with lib; {
@@ -36,7 +36,7 @@ let
   };
 in
 {
-  options.services.qwdtt-cli = {
+  options.services.qwdtt = {
     enable = mkEnableOption "PWDTT CLI with capabilities";
 
     useVendor = mkOption {
@@ -62,9 +62,9 @@ in
     package = mkOption {
       type = types.package;
       default = qwdtt-package;
-      defaultText = literalExpression "qwdtt-cli";
+      defaultText = literalExpression "qwdtt";
       description = ''
-        The qwdtt-cli package to use.
+        The qwdtt package to use.
       '';
     };
 
@@ -73,7 +73,7 @@ in
         type = types.bool;
         default = true;
         description = ''
-          Whether to create security wrappers with capabilities for qwdtt-cli and ip.
+          Whether to create security wrappers with capabilities for qwdtt and ip.
           This allows running the tools without sudo.
         '';
       };
@@ -91,7 +91,7 @@ in
       type = types.bool;
       default = false;
       description = ''
-        Whether to enable bash completion for qwdtt-cli.
+        Whether to enable bash completion for qwdtt.
         This will install the completion script to /etc/bash_completion.d/.
       '';
     };
@@ -100,7 +100,7 @@ in
       type = types.bool;
       default = false;
       description = ''
-        Whether to enable fish completion for qwdtt-cli.
+        Whether to enable fish completion for qwdtt.
         This will install the completion script to fish completions directory.
       '';
     };
@@ -155,7 +155,7 @@ in
       description = ''
         Read-only profiles managed by NixOS configuration.
         Profile names will be prefixed with "ro-" (e.g., "myserver" becomes "ro-myserver").
-        These profiles are read-only and can only be enabled/disabled via 'qwdtt-cli enable/disable' commands.
+        These profiles are read-only and can only be enabled/disabled via 'qwdtt enable/disable' commands.
         Use regular 'add' command to create user-managed profiles instead.
       '';
     };
@@ -182,7 +182,7 @@ in
             builtins.match "[0-9a-fA-F]{16}" cfg.deviceId != null  # if 16 chars, must be hex
           ))
         );
-        message = "services.qwdtt-cli.deviceId (when string of 16 chars) must be hex characters (e.g., '0fd4ffcddb764351')";
+        message = "services.qwdtt.deviceId (when string of 16 chars) must be hex characters (e.g., '0fd4ffcddb764351')";
       }
     ];
 
@@ -357,8 +357,8 @@ NIXEOF
     '';
 
     security.wrappers = mkIf cfg.wrappers.enable {
-      qwdtt-cli = {
-        source = "${cfg.package}/bin/qwdtt-cli";
+      qwdtt = {
+        source = "${cfg.package}/bin/qwdtt";
         capabilities = "cap_net_admin+eip";
         owner = "root";
         group = cfg.wrappers.group;

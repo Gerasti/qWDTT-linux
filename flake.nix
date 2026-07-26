@@ -25,9 +25,9 @@
     in
     {
       overlays.default = final: prev: {
-        qwdtt-cli = final.callPackage ({ buildGoModule, lib }:
+        qwdtt = final.callPackage ({ buildGoModule, lib }:
           buildGoModule {
-            pname = "qwdtt-cli";
+            pname = "qwdtt";
             version = "0.5.0";
 
             src = ./.;
@@ -46,7 +46,7 @@
       };
 
       packages = eachSystem ({ pkgs, ... }: {
-        default = pkgs.qwdtt-cli;
+        default = pkgs.qwdtt;
       });
 
       devShells = eachSystem ({ pkgs, ... }: {
@@ -60,8 +60,8 @@
       });
 
       nixosModules = {
-        qwdtt-cli = ./modules/nixos;
-        default = self.nixosModules.qwdtt-cli;
+        qwdtt = ./modules/nixos;
+        default = self.nixosModules.qwdtt;
       };
     };
 }

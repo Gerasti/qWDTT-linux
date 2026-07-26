@@ -549,6 +549,70 @@ func getTokenChain(ctx context.Context, link string, streamID int, deviceID stri
 	return user, pass, addresses, nil
 }
 
+// ─── WebView captcha helpers ───
+
+const (
+	captchaAutoWebViewTimeout     = 10 * time.Second
+	captchaManualWebViewTimeout   = 60 * time.Second
+	captchaSelectedWebViewTimeout = 120 * time.Second
+)
+
+func drainCaptchaResult(ch chan string) {
+	select {
+	case <-ch:
+	default:
+	}
+}
+
+func requestWebViewCaptcha(
+	streamID int,
+	captchaErr *VkCaptchaError,
+	mode string,
+	timeout time.Duration,
+	captchaResultChan chan string,
+	emitCaptchaRequest func(mode, redirectURI, sessionToken string),
+) (string, error) {
+	if captchaResultChan == nil || captchaErr == nil || captchaErr.RedirectURI == "" || captchaErr.SessionToken == "" {
+		return "", fmt.Errorf("webview captcha data is incomplete")
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "manual" && mode != "selected" {
+		mode = "auto"
+	}
+	if timeout <= 0 {
+		timeout = captchaAutoWebViewTimeout
+	}
+
+	drainCaptchaResult(captchaResultChan)
+	emitCaptchaRequest(mode, captchaErr.RedirectURI, captchaErr.SessionToken)
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	select {
+	case result := <-captchaResultChan:
+		result = strings.TrimSpace(result)
+		if result == "" {
+			return "", fmt.Errorf("webview captcha returned empty result")
+		}
+		lowerResult := strings.ToLower(result)
+		if lowerResult == "error:timeout" {
+			return "", fmt.Errorf("webview captcha timed out")
+		}
+		if strings.HasPrefix(lowerResult, "error:") {
+			return "", fmt.Errorf("webview captcha failed: %s", result)
+		}
+		log.Printf("[STREAM %d] [CAPTCHA] WBV: %s solve succeeded", streamID, mode)
+		return result, nil
+	case <-waitCtx.Done():
+		return "", fmt.Errorf("webview captcha timed out")
+	}
+}
+
+func isWebViewCaptchaTimeout(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "timed out")
+}
+
 func solveCaptchaBySelectedMode(
 	ctx context.Context,
 	streamID int,
@@ -562,6 +626,10 @@ func solveCaptchaBySelectedMode(
 	emitCaptchaRequest func(mode, redirectURI, sessionToken string),
 ) (string, error) {
 	switch getCaptchaMode() {
+	case "wv":
+		log.Printf("[STREAM %d] [CAPTCHA] WBV: auto WebView (attempt %d)", streamID, attempt)
+		return requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout, captchaResultChan, emitCaptchaRequest)
+
 	case "rjs":
 		log.Printf("[STREAM %d] [CAPTCHA] RJS: Go v2 selected in settings (attempt %d)", streamID, attempt)
 		token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
@@ -581,6 +649,8 @@ func solveCaptchaBySelectedMode(
 
 	log.Printf("[STREAM %d] [CAPTCHA] AUTO: start chain (captcha attempt %d)", streamID, attempt)
 
+	lastErr := error(nil)
+
 	token, solveErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
 	if solveErr == nil {
 		log.Printf("[STREAM %d] [CAPTCHA] AUTO: Go v2 solved captcha", streamID)
@@ -589,42 +659,54 @@ func solveCaptchaBySelectedMode(
 	if ctx.Err() != nil {
 		return "", solveErr
 	}
+	lastErr = solveErr
 	if isCaptchaSessionDead(solveErr) {
 		log.Printf("[STREAM %d] [CAPTCHA] AUTO: session dead, requesting fresh challenge from VK", streamID)
 		return "", errCaptchaSessionExpired
 	}
 	log.Printf("[STREAM %d] [CAPTCHA] AUTO: Go v2 failed after %d attempts: %v", streamID, captchaV2MaxAttempts, solveErr)
 
-	// Try a few more times with backoff
-	for retry := 1; retry <= 3; retry++ {
-		log.Printf("[STREAM %d] [CAPTCHA] AUTO: retry attempt %d/3", streamID, retry)
+	for wbvAttempt := 1; wbvAttempt <= 2; wbvAttempt++ {
+		log.Printf("[STREAM %d] [CAPTCHA] AUTO: WBV auto attempt %d/2 (timeout %s)", streamID, wbvAttempt, captchaAutoWebViewTimeout)
+		token, solveErr = requestWebViewCaptcha(streamID, captchaErr, "auto", captchaAutoWebViewTimeout, captchaResultChan, emitCaptchaRequest)
+		if solveErr == nil {
+			log.Printf("[STREAM %d] [CAPTCHA] AUTO: WBV auto solved captcha", streamID)
+			return token, nil
+		}
+		if ctx.Err() != nil {
+			return "", solveErr
+		}
+		lastErr = solveErr
+		if isWebViewCaptchaTimeout(solveErr) {
+			log.Printf("[STREAM %d] [CAPTCHA] AUTO: WBV auto timeout %d/2", streamID, wbvAttempt)
+		} else {
+			log.Printf("[STREAM %d] [CAPTCHA] AUTO: WBV auto error %d/2: %v", streamID, wbvAttempt, solveErr)
+		}
 
-		timer := time.NewTimer(time.Duration(500+rand.Intn(500)) * time.Millisecond)
+		timer := time.NewTimer(time.Duration(250+rand.Intn(250)) * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return "", ctx.Err()
 		case <-timer.C:
 		}
-
-		token, retryErr := solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, captchaV2MaxAttempts)
-		if retryErr == nil {
-			log.Printf("[STREAM %d] [CAPTCHA] AUTO: retry %d succeeded", streamID, retry)
-			return token, nil
-		}
-		if ctx.Err() != nil {
-			return "", retryErr
-		}
-		if isCaptchaSessionDead(retryErr) {
-			log.Printf("[STREAM %d] [CAPTCHA] AUTO: session dead on retry, requesting fresh challenge", streamID)
-			return "", errCaptchaSessionExpired
-		}
-		solveErr = retryErr
-		log.Printf("[STREAM %d] [CAPTCHA] AUTO: retry %d failed: %v", streamID, retry, retryErr)
 	}
 
-	log.Printf("[STREAM %d] [CAPTCHA] AUTO: all attempts exhausted", streamID)
-	return "", fmt.Errorf("automatic captcha solver failed after all attempts: %w", solveErr)
+	log.Printf("[STREAM %d] [CAPTCHA] AUTO: final Go v2 attempt after WBV", streamID)
+	token, solveErr = solveVkCaptchaV2Attempts(ctx, captchaErr, client, profile, savedProfile, 1)
+	if solveErr == nil {
+		log.Printf("[STREAM %d] [CAPTCHA] AUTO: final Go v2 solved captcha", streamID)
+		return token, nil
+	}
+	if ctx.Err() != nil {
+		return "", solveErr
+	}
+	lastErr = solveErr
+	log.Printf("[STREAM %d] [CAPTCHA] AUTO: final Go v2 error: %v", streamID, solveErr)
+	if lastErr != nil {
+		return "", fmt.Errorf("automatic captcha solver failed after all attempts: %w; final Go v2 error: %v", lastErr, solveErr)
+	}
+	return "", solveErr
 }
 
 // GetCreds returns TURN credentials for a given stream.

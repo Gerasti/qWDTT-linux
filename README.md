@@ -34,7 +34,7 @@ in
   ];
   services.qwdtt-cli = {
     enable = true;
-    # package = pkgs.qwdtt-cli;  # override package if needed
+    # package = pkgs.qwdtt;  # override package if needed
     deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
 
     users = [ "alice" ];
@@ -75,7 +75,7 @@ in
 ```
 
 Модуль автоматически:
-- Установит `qwdtt-cli`, `wireguard-tools`, `iproute2`
+- Установит `qwdtt`, `wireguard-tools`, `iproute2`
 - Создаст security wrappers с capabilities для работы без sudo
 - Загрузит kernel module `wireguard`
 
@@ -84,7 +84,7 @@ in
 sudo nixos-rebuild switch
 ```
 
-После установки `qwdtt-cli` доступен через `/run/wrappers/bin/qwdtt-cli`, `qwdtt-cli`.
+После установки `qwdtt` доступен через `/run/wrappers/bin/qwdtt`, `qwdtt`.
 
 ### Arch Linux
 
@@ -97,20 +97,20 @@ sudo pacman -S iproute2 wireguard-tools
 # Для сборки: sudo pacman -S go
 
 # Сделать исполняемым
-chmod +x qwdtt-cli
+chmod +x qwdtt
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
-# sudo mv qwdtt-cli /usr/local/bin/
+# sudo mv qwdtt /usr/local/bin/
 
 # Установить capabilities
-sudo setcap cap_net_admin+eip qwdtt-cli
+sudo setcap cap_net_admin+eip qwdtt
 
 # Опционально: установить автодополнение
 # Bash:
-sudo cp completions/qwdtt-cli.bash /etc/bash_completion.d/qwdtt-cli
+sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt
 # Fish:
 mkdir -p ~/.config/fish/completions
-cp completions/qwdtt-cli.fish ~/.config/fish/completions/
+cp completions/qwdtt.fish ~/.config/fish/completions/
 ```
 
 ### Debian/Ubuntu
@@ -125,68 +125,68 @@ sudo apt install iproute2 wireguard-tools libcap2-bin
 # Для сборки: sudo apt install golang-go
 
 # Сделать исполняемым
-chmod +x qwdtt-cli
+chmod +x qwdtt
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
-# sudo mv qwdtt-cli /usr/local/bin/
+# sudo mv qwdtt /usr/local/bin/
 
 # Установить capabilities
-sudo setcap cap_net_admin+eip qwdtt-cli
+sudo setcap cap_net_admin+eip qwdtt
 
 # Опционально: установить автодополнение
 # Bash:
-sudo cp completions/qwdtt-cli.bash /etc/bash_completion.d/qwdtt-cli
+sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt
 # Fish:
 mkdir -p ~/.config/fish/completions
-cp completions/qwdtt-cli.fish ~/.config/fish/completions/
+cp completions/qwdtt.fish ~/.config/fish/completions/
 ```
 
 ## Использование
 
 ```bash
 # Добавить профиль
-qwdtt-cli add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
+qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
 
 # Подключиться
-qwdtt-cli con myserver
+qwdtt con myserver
 
 # Auto-switch режим
-qwdtt-cli con -auto-switch
+qwdtt con -auto-switch
 
 # С кастомным DNS resolver
-qwdtt-cli con myserver -dns doh-cloudflare
-qwdtt-cli con myserver -dns custom:8.8.8.8:53,1.1.1.1:53
-qwdtt-cli con myserver -dns doh:https://dns.example.com/dns-query
+qwdtt con myserver -dns doh-cloudflare
+qwdtt con myserver -dns custom:8.8.8.8:53,1.1.1.1:53
+qwdtt con myserver -dns doh:https://dns.example.com/dns-query
 
 # Debug информация о подключении
-qwdtt-cli debug
-# или watch -n 1 qwdtt-cli debug
+qwdtt debug
+# или watch -n 1 qwdtt debug
 
 # Отключиться
-qwdtt-cli disconnect
+qwdtt disconnect
 
 # Управление
-qwdtt-cli ls                    # список
-qwdtt-cli edit myserver -priority 100
-qwdtt-cli disable myserver
+qwdtt ls                    # список
+qwdtt edit myserver -priority 100
+qwdtt disable myserver
 ```
 
 ## Команды
 
 ```
-qwdtt-cli connect <profile> [флаги]  - Подключиться к VPN
-qwdtt-cli disconnect                 - Отключиться от VPN
-qwdtt-cli debug                      - Показать debug информацию о соединении
-qwdtt-cli add <name> <wdtt://...>    - Добавить профиль
-qwdtt-cli edit <name> [флаги]        - Редактировать профиль
-qwdtt-cli remove <name>              - Удалить профиль
-qwdtt-cli list                       - Список профилей
-qwdtt-cli show <name>                - Показать профиль
-qwdtt-cli enable <name>              - Включить профиль
-qwdtt-cli disable <name>             - Отключить профиль
-qwdtt-cli device-id [id]             - Показать/установить Device ID
-qwdtt-cli regenerate-id              - Перегенерировать Device ID
-qwdtt-cli version                    - Версия
+qwdtt connect <profile> [флаги]  - Подключиться к VPN
+qwdtt disconnect                 - Отключиться от VPN
+qwdtt debug                      - Показать debug информацию о соединении
+qwdtt add <name> <wdtt://...>    - Добавить профиль
+qwdtt edit <name> [флаги]        - Редактировать профиль
+qwdtt remove <name>              - Удалить профиль
+qwdtt list                       - Список профилей
+qwdtt show <name>                - Показать профиль
+qwdtt enable <name>              - Включить профиль
+qwdtt disable <name>             - Отключить профиль
+qwdtt device-id [id]             - Показать/установить Device ID
+qwdtt regenerate-id              - Перегенерировать Device ID
+qwdtt version                    - Версия
 ```
 
 ### Короткие алиасы
@@ -215,7 +215,7 @@ dis    - disable
   - Кастомный UDP: `custom:8.8.8.8:53,1.1.1.1:53`
   - Кастомный DoH: `doh:https://dns.example.com/dns-query`
 - `-captcha MODE` - режим обхода captcha (default: auto)
-  - Опции: `auto`, `rjs`
+  - Опции: `auto`, `rjs`, `wv`
 
 ## Флаги edit
 
@@ -231,18 +231,18 @@ dis    - disable
 **Приоритеты:**
 - Профили с более высоким приоритетом используются первыми в `-auto-switch`
 - По умолчанию priority = 0
-- Пример: `qwdtt-cli edit myserver -priority 100`
+- Пример: `qwdtt edit myserver -priority 100`
 
 **Отключенные профили:**
 - Не отображаются в интерактивном выборе
 - Не используются в `-auto-switch`
-- Можно подключиться явно: `qwdtt-cli con disabled-profile`
+- Можно подключиться явно: `qwdtt con disabled-profile`
 
 **Read-only профили (NixOS):**
 - Управляются через NixOS конфигурацию
 - Имена с префиксом `ro-` (например, `ro-work`)
 - Нельзя редактировать или удалить через CLI
-- Можно включать/отключать: `qwdtt-cli enable ro-work`
+- Можно включать/отключать: `qwdtt enable ro-work`
 - Поддержка sops-nix для секретов (device_id, wdtt:// ссылки)
 - Автоматически создаются для указанных пользователей
 
@@ -262,7 +262,7 @@ dis    - disable
 - `doh-google` - https://dns.google/dns-query
 - `doh:https://...` - кастомный DoH endpoint
 
-Пример: `qwdtt-cli con myserver -dns doh-cloudflare`
+Пример: `qwdtt con myserver -dns doh-cloudflare`
 
 ## Suspend/Resume
 
