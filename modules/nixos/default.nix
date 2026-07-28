@@ -39,15 +39,6 @@ in
   options.services.qwdtt = {
     enable = mkEnableOption "PWDTT CLI with capabilities";
 
-    useVendor = mkOption {
-      type = types.bool;
-      default = true;
-      description = ''
-        Deprecated: vendor is always used now.
-      '';
-      visible = false;
-    };
-
     deviceId = mkOption {
       type = types.nullOr (types.either types.str types.path);
       default = null;
