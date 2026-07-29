@@ -183,151 +183,147 @@ in
       pkgs.iproute2
     ];
 
-    system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) (
-      if builtins.isString cfg.deviceId && builtins.stringLength cfg.deviceId == 16
-      then ''
-        mkdir -p /root/.config/qwdtt
-        echo -n "${cfg.deviceId}" > /root/.config/qwdtt/device_id
-        chmod 600 /root/.config/qwdtt/device_id
-      ''
-      else ''
-        mkdir -p /root/.config/qwdtt
-        cat "${toString cfg.deviceId}" > /root/.config/qwdtt/device_id
-        chmod 600 /root/.config/qwdtt/device_id
-      ''
-    );
+system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) {
+      deps = [ "setupSecrets" ];
+      text =
+        if builtins.isString cfg.deviceId && builtins.stringLength cfg.deviceId == 16
+        then ''
+          mkdir -p /root/.config/qwdtt
+          echo -n "${cfg.deviceId}" > /root/.config/qwdtt/device_id
+          chmod 600 /root/.config/qwdtt/device_id
+        ''
+        else ''
+          mkdir -p /root/.config/qwdtt
+          cat "${toString cfg.deviceId}" > /root/.config/qwdtt/device_id
+          chmod 600 /root/.config/qwdtt/device_id
+        '';
+    };
+    
+system.activationScripts.qwdtt-ro-profiles = mkIf (cfg.profiles != {}) {
+      deps = [ "setupSecrets" ];
+      text = ''
+        # Create profiles for root
+        mkdir -p /root/.config/qwdtt/ro-profiles
+        chmod 700 /root/.config/qwdtt
+        chmod 700 /root/.config/qwdtt/ro-profiles
 
-    system.activationScripts.qwdtt-ro-profiles = mkIf (cfg.profiles != {}) ''
-      # Create profiles for root
-      mkdir -p /root/.config/qwdtt/ro-profiles
-
-      ${concatStringsSep "\n" (mapAttrsToList (name: profile:
-        let
-          profileName = "ro-${name}";
-
-          # Determine if link is a runtime path (sops secret) or static content
-          isRuntimePath = builtins.isString profile.link &&
-                         (builtins.match "^/run/secrets/.*" profile.link != null ||
-                          builtins.match "^/etc/secrets/.*" profile.link != null);
-
-          # Determine device ID path or value
-          isDeviceIdRuntimePath = profile.deviceId != null && builtins.isString profile.deviceId &&
-                                 (builtins.match "^/run/secrets/.*" profile.deviceId != null ||
-                                  builtins.match "^/etc/secrets/.*" profile.deviceId != null);
-
-          isGlobalDeviceIdRuntimePath = cfg.deviceId != null && builtins.isString cfg.deviceId &&
-                                       (builtins.match "^/run/secrets/.*" cfg.deviceId != null ||
-                                        builtins.match "^/etc/secrets/.*" cfg.deviceId != null);
-
-          deviceIdValue = if isDeviceIdRuntimePath
-                         then ""  # Will use device_id_file
-                         else if profile.deviceId != null && builtins.isString profile.deviceId && builtins.stringLength profile.deviceId == 16
-                         then profile.deviceId
-                         else if profile.deviceId != null && builtins.isPath profile.deviceId
-                         then builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile profile.deviceId)
-                         else if profile.deviceId != null && builtins.isString profile.deviceId && builtins.match "^/.*" profile.deviceId != null
-                         then builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile profile.deviceId)
-                         else if isGlobalDeviceIdRuntimePath
-                         then ""
-                         else if cfg.deviceId != null && builtins.isString cfg.deviceId && builtins.stringLength cfg.deviceId == 16
-                         then cfg.deviceId
-                         else if cfg.deviceId != null && builtins.isPath cfg.deviceId
-                         then builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile cfg.deviceId)
-                         else if cfg.deviceId != null && builtins.isString cfg.deviceId && builtins.match "^/.*" cfg.deviceId != null
-                         then builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile cfg.deviceId)
-                         else "";
-
-          deviceIdPath = if isDeviceIdRuntimePath
-                        then profile.deviceId
-                        else if isGlobalDeviceIdRuntimePath
-                        then cfg.deviceId
-                        else "";
-
-        in
-        # For runtime paths, store link_file; for static paths, parse and store values
-        if isRuntimePath then ''
-          # Create profile ${profileName} with link_file (runtime secret)
-          mkdir -p /root/.config/qwdtt/ro-profiles
-          cat > /root/.config/qwdtt/ro-profiles/${profileName}.json <<'NIXEOF'
-{
-  "listen": "127.0.0.1:9000",
-  "link_file": "${profile.link}",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-          chmod 444 /root/.config/qwdtt/ro-profiles/${profileName}.json
-
-          ${concatStringsSep "\n" (map (user: ''
-            USER_HOME=$(getent passwd ${user} | cut -d: -f6)
-            if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
-              mkdir -p "$USER_HOME/.config/qwdtt/ro-profiles"
-              cat > "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json" <<'NIXEOF'
-{
-  "listen": "127.0.0.1:9000",
-  "link_file": "${profile.link}",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-              chmod 444 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-              chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-              chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
-              chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
-            fi
-          '') cfg.users)}
-        '' else
+        ${concatStringsSep "\n" (mapAttrsToList (name: profile:
           let
-            linkContent = if builtins.isPath profile.link
-                         then builtins.readFile profile.link
-                         else if builtins.isString profile.link && builtins.match "^/.*" profile.link != null
-                         then builtins.readFile profile.link
-                         else profile.link;
+            profileName = "ro-${name}";
 
-            stripped = builtins.replaceStrings ["wdtt://"] [""] linkContent;
-            parts = builtins.split ":" stripped;
-            ip = builtins.elemAt parts 0;
-            dtlsPort = builtins.elemAt parts 2;
+            isRuntimePath = builtins.isString profile.link &&
+                          builtins.match "^/.*" profile.link != null;
 
-            tailParts = builtins.genList (i: builtins.elemAt parts (8 + i * 2))
-                                         ((builtins.length parts - 8) / 2);
-            tail = builtins.concatStringsSep ":" tailParts;
-            passwordHashesFull = builtins.head (builtins.split "#" tail);
-            passwordHashesParts = builtins.split ":" passwordHashesFull;
-            passwordParts = builtins.filter builtins.isString passwordHashesParts;
+            resolvedDeviceId =
+              let
+                resolve = v:
+                  if v == null then { kind = "none"; }
+                  else if builtins.isString v && builtins.match "^/.*" v != null
+                  then { kind = "runtime"; path = v; }
+                  else if builtins.isString v && builtins.stringLength v == 16
+                  then { kind = "static"; value = v; }
+                  else if builtins.isPath v
+                  then { kind = "static"; value = builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile v); }
+                  else { kind = "none"; };
+                fromProfile = resolve profile.deviceId;
+                fromGlobal  = resolve cfg.deviceId;
+              in
+                if fromProfile.kind != "none" then fromProfile else fromGlobal;
 
-            hashesList = if builtins.length passwordParts > 0
-                        then builtins.elemAt passwordParts (builtins.length passwordParts - 1)
-                        else "";
-            password = if builtins.length passwordParts > 1
-                      then builtins.concatStringsSep ":" (builtins.genList (i: builtins.elemAt passwordParts i) (builtins.length passwordParts - 1))
-                      else "";
+            deviceIdValue = if resolvedDeviceId.kind == "static" then resolvedDeviceId.value else "";
+            deviceIdPath  = if resolvedDeviceId.kind == "runtime" then resolvedDeviceId.path else "";
 
-            hashesArray = if hashesList != ""
-                         then builtins.fromJSON (builtins.toJSON (builtins.split "," hashesList))
-                         else [];
-            hashesFiltered = builtins.filter builtins.isString hashesArray;
-            hashesJson = builtins.toJSON hashesFiltered;
-          in ''
-            # Create profile ${profileName} with parsed values (static content)
+            injectDeviceId = jsonPath: optionalString (deviceIdPath != "") ''
+              if [ -r "${deviceIdPath}" ]; then
+                DEVICE_ID_VALUE="$(tr -d '\n\r' < "${deviceIdPath}")"
+                if [ -z "$DEVICE_ID_VALUE" ]; then
+                  echo "qwdtt: ERROR: device id secret ${deviceIdPath} is empty for profile ${profileName}" >&2
+                  exit 1
+                fi
+                ${pkgs.jq}/bin/jq --arg id "$DEVICE_ID_VALUE" '. + {device_id: $id}' \
+                  "${jsonPath}" > "${jsonPath}.tmp"
+                mv "${jsonPath}.tmp" "${jsonPath}"
+                chmod 400 "${jsonPath}"
+              else
+                echo "qwdtt: ERROR: device id secret ${deviceIdPath} not readable, profile ${profileName} would silently get a different device id" >&2
+                exit 1
+              fi
+            '';
+
+          in
+          # For runtime paths, store link_file; for static paths, parse and store values
+          if isRuntimePath then ''
+            # Create profile ${profileName} with link_file (runtime secret)
             mkdir -p /root/.config/qwdtt/ro-profiles
             cat > /root/.config/qwdtt/ro-profiles/${profileName}.json <<'NIXEOF'
 {
-  "peer": "${ip}:${dtlsPort}",
-  "password": "${password}",
-  "hashes": ${hashesJson},
   "listen": "127.0.0.1:9000",
+  "link_file": "${profile.link}",
   ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
   "priority": ${toString profile.priority}
 }
 NIXEOF
-            chmod 444 /root/.config/qwdtt/ro-profiles/${profileName}.json
+            chmod 400 /root/.config/qwdtt/ro-profiles/${profileName}.json
+            ${injectDeviceId "/root/.config/qwdtt/ro-profiles/${profileName}.json"}
 
             ${concatStringsSep "\n" (map (user: ''
               USER_HOME=$(getent passwd ${user} | cut -d: -f6)
               if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
                 mkdir -p "$USER_HOME/.config/qwdtt/ro-profiles"
+                chmod 700 "$USER_HOME/.config/qwdtt"
+                chmod 700 "$USER_HOME/.config/qwdtt/ro-profiles"
                 cat > "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json" <<'NIXEOF'
+{
+  "listen": "127.0.0.1:9000",
+  "link_file": "${profile.link}",
+  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
+  "priority": ${toString profile.priority}
+}
+NIXEOF
+                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                chmod 400 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                ${injectDeviceId ''"$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"''}
+                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
+                chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
+              fi
+            '') cfg.users)}
+          '' else
+            let
+              linkContent = if builtins.isPath profile.link
+                           then builtins.readFile profile.link
+                           else if builtins.isString profile.link && builtins.match "^/.*" profile.link != null
+                           then builtins.readFile profile.link
+                           else profile.link;
+
+              stripped = builtins.replaceStrings ["wdtt://"] [""] linkContent;
+              parts = builtins.split ":" stripped;
+              ip = builtins.elemAt parts 0;
+              dtlsPort = builtins.elemAt parts 2;
+
+              tailParts = builtins.genList (i: builtins.elemAt parts (8 + i * 2))
+                                           ((builtins.length parts - 8) / 2);
+              tail = builtins.concatStringsSep ":" tailParts;
+              passwordHashesFull = builtins.head (builtins.split "#" tail);
+              passwordHashesParts = builtins.split ":" passwordHashesFull;
+              passwordParts = builtins.filter builtins.isString passwordHashesParts;
+
+              hashesList = if builtins.length passwordParts > 0
+                          then builtins.elemAt passwordParts (builtins.length passwordParts - 1)
+                          else "";
+              password = if builtins.length passwordParts > 1
+                        then builtins.concatStringsSep ":" (builtins.genList (i: builtins.elemAt passwordParts i) (builtins.length passwordParts - 1))
+                        else "";
+
+              hashesArray = if hashesList != ""
+                           then builtins.fromJSON (builtins.toJSON (builtins.split "," hashesList))
+                           else [];
+              hashesFiltered = builtins.filter builtins.isString hashesArray;
+              hashesJson = builtins.toJSON hashesFiltered;
+            in ''
+              # Create profile ${profileName} with parsed values (static content)
+              mkdir -p /root/.config/qwdtt/ro-profiles
+              cat > /root/.config/qwdtt/ro-profiles/${profileName}.json <<'NIXEOF'
 {
   "peer": "${ip}:${dtlsPort}",
   "password": "${password}",
@@ -337,15 +333,37 @@ NIXEOF
   "priority": ${toString profile.priority}
 }
 NIXEOF
-                chmod 444 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
-                chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
-              fi
-            '') cfg.users)}
-          ''
-      ) cfg.profiles)}
-    '';
+              chmod 400 /root/.config/qwdtt/ro-profiles/${profileName}.json
+              ${injectDeviceId "/root/.config/qwdtt/ro-profiles/${profileName}.json"}
+
+              ${concatStringsSep "\n" (map (user: ''
+                USER_HOME=$(getent passwd ${user} | cut -d: -f6)
+                if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+                  mkdir -p "$USER_HOME/.config/qwdtt/ro-profiles"
+                  chmod 700 "$USER_HOME/.config/qwdtt"
+                  chmod 700 "$USER_HOME/.config/qwdtt/ro-profiles"
+                  cat > "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json" <<'NIXEOF'
+{
+  "peer": "${ip}:${dtlsPort}",
+  "password": "${password}",
+  "hashes": ${hashesJson},
+  "listen": "127.0.0.1:9000",
+  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
+  "priority": ${toString profile.priority}
+}
+NIXEOF
+                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                  chmod 400 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                  ${injectDeviceId ''"$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"''}
+                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
+                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
+                  chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
+                fi
+              '') cfg.users)}
+            ''
+        ) cfg.profiles)}
+      '';
+    };
 
     security.wrappers = mkIf cfg.wrappers.enable {
       qwdtt = {

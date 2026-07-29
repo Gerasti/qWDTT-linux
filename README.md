@@ -42,6 +42,7 @@ in
     profiles = {
     # read-only profiles can only be enabled/disabled
       work = {
+        # alice has access to sops file
         link = config.sops.secrets.work-server.path; # (path or string)
         priority = 100;
       };
