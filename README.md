@@ -1,4 +1,4 @@
-# qWDTT CLI v0.5.0
+# qWDTT CLI v0.8.0
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
 
