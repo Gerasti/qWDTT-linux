@@ -15,16 +15,17 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
 	"github.com/pion/logging"
+	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/turn/v5"
 )
 
 const (
 	workerSendBuf      = 128
-	sessionReadTimeout = 35 * time.Second
+	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
 	keepaliveByte      = 0xFF
-	keepaliveInterval  = 20 * time.Second
+	keepaliveInterval  = 15 * time.Second
 )
 
 // Handshake semaphore: limit to 3 concurrent DTLS handshakes
@@ -67,6 +68,10 @@ func RunSession(
 	stats *Stats,
 ) (bool, error) {
 	configDelivered := false
+	var firstWrapUp uint32
+	var firstWrapDown uint32
+	var firstDtlsWrite uint32
+	var firstDtlsRead uint32
 
 	if len(creds.TurnURLs) == 0 {
 		return false, fmt.Errorf("нет TURN URL в учетных данных")
@@ -114,6 +119,7 @@ func RunSession(
 		STUNServerAddr:         turnAddr,
 		TURNServerAddr:         turnAddr,
 		Conn:                   turnConn,
+		Net:                    new(stdnet.Net),
 		Username:               creds.User,
 		Password:               creds.Pass,
 		RequestedAddressFamily: addrFamily,
@@ -157,7 +163,7 @@ func RunSession(
 	sessionWg.Add(1)
 	go func() {
 		defer sessionWg.Done()
-		t := time.NewTicker(20 * time.Second)
+		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
 		for {
 			select {
@@ -215,6 +221,9 @@ func RunSession(
 				}
 				payload = plain[:m]
 			}
+			if atomic.CompareAndSwapUint32(&firstWrapUp, 0, 1) {
+				log.Printf("[СЕССИЯ #%d] [ДЕБАГ] Успешно расшифрован/получен ПЕРВЫЙ пакет от TURN Relay (%d байт)", sessionID, len(payload))
+			}
 			if _, writeErr := pipeA.WriteTo(payload, peer); writeErr != nil {
 				return
 			}
@@ -242,6 +251,9 @@ func RunSession(
 					out = wrapped
 				}
 			}
+			if atomic.CompareAndSwapUint32(&firstWrapDown, 0, 1) {
+				log.Printf("[СЕССИЯ #%d] [ДЕБАГ] Успешно зашифрован/отправлен ПЕРВЫЙ пакет на TURN Relay (%d байт)", sessionID, len(out))
+			}
 			if _, writeErr := relay.WriteTo(out, peer); writeErr != nil {
 				return
 			}
@@ -267,6 +279,7 @@ func RunSession(
 		ExtendedMasterSecret:  dtls.RequireExtendedMasterSecret,
 		CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
+		MTU:                   1100,
 		// No ServerName (SNI) — less detectable by DPI
 	}
 
@@ -277,7 +290,7 @@ func RunSession(
 	}
 	defer dtlsConn.Close()
 
-	hctx, hcancel := context.WithTimeout(sessCtx, 20*time.Second)
+	hctx, hcancel := context.WithTimeout(sessCtx, 50*time.Second)
 	log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 	err = dtlsConn.HandshakeContext(hctx)
 	hcancel()
@@ -294,8 +307,8 @@ func RunSession(
 	}
 	log.Printf("[ВОРКЕР #%d] [DTLS] Соединение установлено ✓", sessionID)
 
-	atomic.AddInt32(&stats.ActiveConnections, 1)
-	defer atomic.AddInt32(&stats.ActiveConnections, -1)
+	stats.ActiveConnections.Add(1)
+	defer stats.ActiveConnections.Add(-1)
 
 	// Запрос конфига
 	if getConfig && configCh != nil {
@@ -375,7 +388,10 @@ func RunSession(
 				if !ok {
 					return
 				}
-				_ = dtlsConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				_ = dtlsConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if atomic.CompareAndSwapUint32(&firstDtlsWrite, 0, 1) {
+					log.Printf("[ВОРКЕР #%d] [ДЕБАГ] Отправлен ПЕРВЫЙ пакет в DTLS-соединение (%d байт)", sessionID, len(pkt))
+				}
 				_, writeErr := dtlsConn.Write(pkt)
 				putPktBuf(pkt)
 				if writeErr != nil {
@@ -390,12 +406,11 @@ func RunSession(
 	go func() {
 		defer proxyWg.Done()
 		defer sessCancel()
+		b := make([]byte, 2000)
 		for {
-			pkt := getPktBuf(2048)
 			_ = dtlsConn.SetReadDeadline(time.Now().Add(sessionReadTimeout))
-			n, readErr := dtlsConn.Read(pkt)
+			n, readErr := dtlsConn.Read(b)
 			if readErr != nil {
-				putPktBuf(pkt)
 				if sessCtx.Err() != nil {
 					return
 				}
@@ -407,12 +422,16 @@ func RunSession(
 			}
 
 			// Skip keepalive pong from server
-			if n == 1 && pkt[0] == keepaliveByte {
-				putPktBuf(pkt)
+			if n == 1 && b[0] == keepaliveByte {
 				continue
 			}
 
-			pkt = pkt[:n]
+			if atomic.CompareAndSwapUint32(&firstDtlsRead, 0, 1) {
+				log.Printf("[ВОРКЕР #%d] [ДЕБАГ] Получен ПЕРВЫЙ пакет из DTLS-соединения (%d байт)", sessionID, n)
+			}
+
+			pkt := getPktBuf(n)
+			copy(pkt, b[:n])
 			select {
 			case d.ReturnCh <- pkt:
 			case <-sessCtx.Done():
@@ -430,4 +449,171 @@ func RunSession(
 	_ = pipeB.Close()
 	log.Printf("[СЕССИЯ #%d] Завершена", sessionID)
 	return configDelivered, nil
+}
+
+func RunPing(
+	ctx context.Context,
+	tp *TurnParams,
+	peer *net.UDPAddr,
+	creds *Credentials,
+) (int64, error) {
+	startPing := time.Now()
+
+	if len(creds.TurnURLs) == 0 {
+		return 0, fmt.Errorf("нет TURN URL")
+	}
+	selectedURL := creds.TurnURLs[0]
+
+	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	if err != nil {
+		return 0, err
+	}
+	if tp.Host != "" {
+		urlhost = tp.Host
+	}
+	if tp.Port != "" {
+		urlport = tp.Port
+	}
+	turnAddr := net.JoinHostPort(urlhost, urlport)
+
+	resolved, err := net.ResolveUDPAddr("udp", turnAddr)
+	if err != nil {
+		return 0, err
+	}
+	c, err := net.DialUDP("udp", nil, resolved)
+	if err != nil {
+		return 0, err
+	}
+	defer c.Close()
+
+	var turnConn net.PacketConn = &connectedUDPConn{c}
+
+	var addrFamily turn.RequestedAddressFamily
+	if peer.IP.To4() != nil {
+		addrFamily = turn.RequestedAddressFamilyIPv4
+	} else {
+		addrFamily = turn.RequestedAddressFamilyIPv6
+	}
+
+	tc, err := turn.NewClient(&turn.ClientConfig{
+		STUNServerAddr:         turnAddr,
+		TURNServerAddr:         turnAddr,
+		Conn:                   turnConn,
+		Net:                    new(stdnet.Net),
+		Username:               creds.User,
+		Password:               creds.Pass,
+		RequestedAddressFamily: addrFamily,
+		LoggerFactory:          &NullLoggerFactory{},
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer tc.Close()
+
+	if err = tc.Listen(); err != nil {
+		return 0, err
+	}
+
+	relay, err := tc.Allocate()
+	if err != nil {
+		return 0, err
+	}
+	defer relay.Close()
+
+	pipeA, pipeB := connutil.AsyncPacketPipe()
+	defer pipeA.Close()
+	defer pipeB.Close()
+
+	sessCtx, sessCancel := context.WithCancel(ctx)
+	defer sessCancel()
+
+	var relayWg sync.WaitGroup
+	relayWg.Add(2)
+
+	useWrap := len(tp.WrapKey) == wrapKeyLen
+	var obfsCfg *ObfsConfig
+	var obfsWriteState *ObfsState
+	if useWrap {
+		obfsCfg = NewObfsConfig(tp.ObfsMode)
+		obfsWriteState = NewObfsState()
+	}
+
+	// relay -> pipeA
+	go func() {
+		defer relayWg.Done()
+		defer sessCancel()
+		buf := make([]byte, readBufSize+80)
+		plain := make([]byte, readBufSize)
+		for {
+			n, _, err := relay.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			payload := buf[:n]
+			if useWrap {
+				if !obfsIsRTPPacket(payload) {
+					continue
+				}
+				m, err := obfsUnwrapPacket(tp.WrapKey, payload, plain)
+				if err != nil {
+					continue
+				}
+				payload = plain[:m]
+			}
+			_, _ = pipeA.WriteTo(payload, peer)
+		}
+	}()
+
+	// pipeA -> relay
+	go func() {
+		defer relayWg.Done()
+		defer sessCancel()
+		b := make([]byte, readBufSize)
+		for {
+			n, _, err := pipeA.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			out := b[:n]
+			if useWrap {
+				wrapped, err := obfsWrapPacket(tp.WrapKey, out, obfsCfg, obfsWriteState)
+				if err != nil {
+					return
+				}
+				out = wrapped
+			}
+			_, _ = relay.WriteTo(out, peer)
+		}
+	}()
+
+	cert, err := selfsign.GenerateSelfSigned()
+	if err != nil {
+		return 0, err
+	}
+
+	dtlsCfg := &dtls.Config{
+		Certificates:          []tls.Certificate{cert},
+		InsecureSkipVerify:    true,
+		ExtendedMasterSecret:  dtls.RequireExtendedMasterSecret,
+		CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+		ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
+		MTU:                   1100,
+	}
+
+	dtlsConn, err := dtls.Client(pipeB, peer, dtlsCfg)
+	if err != nil {
+		return 0, err
+	}
+	defer dtlsConn.Close()
+
+	hctx, hcancel := context.WithTimeout(sessCtx, 15*time.Second)
+	defer hcancel()
+
+	err = dtlsConn.HandshakeContext(hctx)
+	if err != nil {
+		return 0, err
+	}
+
+	rtt := time.Since(startPing).Milliseconds()
+	return rtt, nil
 }

@@ -151,7 +151,7 @@ func (d *Dispatcher) readLoop() {
 		}
 
 		d.clientAddr.Store(&addr)
-		atomic.AddInt64(&d.stats.TotalBytesUp, int64(n))
+		d.stats.TotalBytesUp.Add(int64(n))
 
 		pkt := getPktBuf(n)
 		copy(pkt, buf[:n])
@@ -224,7 +224,7 @@ func (d *Dispatcher) writeLoop() {
 					return
 				}
 			}
-			atomic.AddInt64(&d.stats.TotalBytesDown, int64(len(pkt)))
+			d.stats.TotalBytesDown.Add(int64(len(pkt)))
 			putPktBuf(pkt)
 		}
 	}

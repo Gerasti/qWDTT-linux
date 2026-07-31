@@ -28,8 +28,8 @@ import (
 
 const (
 	captchaV2APIVersion    = "5.131"
-	captchaV2ScriptVersion = "1.1.1384"
-	captchaV2DeviceInfo    = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1040,"innerWidth":1920,"innerHeight":970,"devicePixelRatio":1,"language":"ru-RU","languages":["ru-RU","ru","en-US","en"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"default"}`
+	captchaV2ScriptVersion = "1.1.1324"
+	captchaV2DeviceInfo    = `{"screenWidth":1920,"screenHeight":1080,"screenAvailWidth":1920,"screenAvailHeight":1080,"innerWidth":1920,"innerHeight":951,"devicePixelRatio":1,"language":"en-US","languages":["en-US","en"],"webdriver":false,"hardwareConcurrency":8,"notificationsPermission":"denied"}`
 )
 
 var (
@@ -155,9 +155,7 @@ func solveVkCaptchaV2Attempts(
 		}
 		log.Printf("[КАПЧА] v2 попытка %d ошибка: %v", attempt, solveErr)
 		if errors.Is(solveErr, errCaptchaV2RateLimit) {
-			log.Printf("[КАПЧА] Превышен лимит сессии капчи. Ожидаю 5 секунд...")
-			time.Sleep(5 * time.Second)
-			continue
+			return "", solveErr
 		}
 
 		backoffSteps := attempt
@@ -282,7 +280,7 @@ func captchaV2BaseValues(sessionToken, domain string) [][2]string {
 }
 
 func captchaDomainFromRedirectURI(redirectURI string) string {
-    const fallback = "vk.ru"
+    const fallback = "vk.com"
     parsed, err := url.Parse(redirectURI)
     if err != nil {
             return fallback
@@ -410,7 +408,7 @@ func captchaV2AcceptLanguage(profile Profile) string {
 	if strings.Contains(profile.SecChUaMobile, "?1") {
 		return "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
 	}
-	return "ru-RU,ru;q=0.9"
+	return "en-US,en;q=0.9"
 }
 
 func captchaV2BrowserFP() (string, error) {
@@ -443,7 +441,7 @@ func (s *captchaV2Session) fetchDebugInfo(scriptURL string) (string, error) {
 	}
 	body, err := s.doRaw(fhttp.MethodGet, scriptURL, nil, map[string]string{
 		"Accept":  "text/javascript,*/*",
-		"Referer": "https://id.vk.ru/",
+		"Referer": "https://id.vk.com/",
 	})
 	if err != nil {
 		return "", err
@@ -591,7 +589,7 @@ func (s *captchaV2Session) solveCheckboxCaptcha(
 	select {
 	case <-s.ctx.Done():
 		return "", s.ctx.Err()
-	case <-time.After(time.Duration(400+mathrand.Intn(250)) * time.Millisecond):
+	case <-time.After(time.Duration(800+mathrand.Intn(500)) * time.Millisecond):
 	}
 
 	check, err := s.performCaptchaCheck(sessionToken, browserFP, hash, "{}", "[]", debugInfo)
@@ -617,7 +615,6 @@ func (s *captchaV2Session) solveCheckboxCaptcha(
 }
 
 func solveCaptchaPoWV2(ctx context.Context, input string, difficulty int) string {
-	time.Sleep(time.Duration(200+mathrand.Intn(300)) * time.Millisecond)
 	if input == "" || difficulty <= 0 {
 		return ""
 	}
@@ -658,8 +655,8 @@ func (s *captchaV2Session) doRaw(
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Origin", "https://vk.ru")
-	req.Header.Set("Referer", "https://vk.ru/")
+	req.Header.Set("Origin", "https://vk.com")
+	req.Header.Set("Referer", "https://vk.com/")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -739,11 +736,11 @@ func captchaV2StringifyAny(value any) string {
 
 // applyBrowserProfileFhttp applies browser headers to fhttp requests
 func applyBrowserProfileFhttp(req *fhttp.Request, profile Profile) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("sec-ch-ua", profile.SecChUa)
 	req.Header.Set("sec-ch-ua-mobile", profile.SecChUaMobile)
 	req.Header.Set("sec-ch-ua-platform", profile.SecChUaPlatform)
-	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+	req.Header.Set("Accept-Language", captchaV2AcceptLanguage(profile))
 	req.Header.Set("DNT", "1")
 }
 
@@ -752,16 +749,43 @@ type VkCaptchaError struct {
 	ErrorCode      int
 	ErrorMsg       string
 	CaptchaSid     string
+	CaptchaImg     string
 	RedirectURI    string
 	SessionToken   string
 	CaptchaTs      string
 	CaptchaAttempt string
 }
 
+func (e *VkCaptchaError) Error() string {
+	if e == nil {
+		return "VK captcha required"
+	}
+	if e.ErrorCode != 0 && e.ErrorCode != 14 {
+		if e.ErrorMsg != "" {
+			return fmt.Sprintf("VK API error %d: %s", e.ErrorCode, e.ErrorMsg)
+		}
+		return fmt.Sprintf("VK API error %d", e.ErrorCode)
+	}
+	if e.RedirectURI != "" {
+		return fmt.Sprintf("VK captcha required: redirect_uri, sid=%q", e.CaptchaSid)
+	}
+	if e.CaptchaImg != "" {
+		return fmt.Sprintf("VK captcha required: captcha_img, sid=%q", e.CaptchaSid)
+	}
+	if e.CaptchaSid != "" {
+		return fmt.Sprintf("VK captcha required: sid=%q", e.CaptchaSid)
+	}
+	if e.ErrorMsg != "" {
+		return fmt.Sprintf("VK captcha required: %s", e.ErrorMsg)
+	}
+	return "VK captcha required"
+}
+
 func parseVkCaptchaError(errData map[string]interface{}) *VkCaptchaError {
 	codeFloat, _ := errData["error_code"].(float64)
 	redirectUri, _ := errData["redirect_uri"].(string)
 	errorMsg, _ := errData["error_msg"].(string)
+	captchaImg, _ := errData["captcha_img"].(string)
 
 	captchaSid, _ := errData["captcha_sid"].(string)
 	if captchaSid == "" {
@@ -795,6 +819,7 @@ func parseVkCaptchaError(errData map[string]interface{}) *VkCaptchaError {
 		ErrorCode:      int(codeFloat),
 		ErrorMsg:       errorMsg,
 		CaptchaSid:     captchaSid,
+		CaptchaImg:     captchaImg,
 		RedirectURI:    redirectUri,
 		SessionToken:   sessionToken,
 		CaptchaTs:      captchaTs,

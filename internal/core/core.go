@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Config — все параметры запуска (профиль + runtime).
@@ -200,14 +201,25 @@ func (c *Core) Start() (<-chan Event, error) {
 		<-ctx.Done()
 		close(shutdownCh)
 	}()
-	go stats.RunLoop(shutdownCh,
-		func(level, msg string) {
-			c.emit(Event{Type: EventLog, Level: level, Message: msg})
-		},
-		func(rx, tx int64, workers int32) {
-			c.emit(Event{Type: EventStats, RxBytes: rx, TxBytes: tx, Workers: workers})
-		},
-	)
+	go stats.RunLoop(shutdownCh)
+
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-shutdownCh:
+				return
+			case <-ticker.C:
+				c.emit(Event{
+					Type:      EventStats,
+					RxBytes:   stats.TotalBytesDown.Load(),
+					TxBytes:   stats.TotalBytesUp.Load(),
+					Workers:   stats.ActiveConnections.Load(),
+				})
+			}
+		}
+	}()
 
 	disp := NewDispatcher(ctx, localConn, stats)
 

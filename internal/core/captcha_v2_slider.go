@@ -78,10 +78,7 @@ func (s *captchaV2Session) solveSliderCaptcha(
 	}
 	log.Printf("[КАПЧА] v2 slider guesses ranked: total=%d limit=%d", len(guesses), limit)
 
-	deviceJSON := captchaV2DeviceInfo
-	if s.savedProfile != nil && strings.TrimSpace(s.savedProfile.DeviceJSON) != "" {
-		deviceJSON = s.savedProfile.DeviceJSON
-	}
+	deviceJSON := captchaV2DeviceJSON(s.savedProfile)
 	if _, err := s.captchaRequest("captchaNotRobot.componentDone", [][2]string{
 		{"session_token", sessionToken},
 		{"domain", s.domain},

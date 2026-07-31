@@ -222,12 +222,13 @@ func WorkerGroup(
 
 					turnAllocAttrMissing := strings.Contains(errStrLower, "turn allocate") &&
 						strings.Contains(errStrLower, "attribute not found")
-					turnCredRefreshNeeded := turnAllocAttrMissing ||
+					isTurnQuota := strings.Contains(errStrLower, "quota") || strings.Contains(errStr, "486")
+					turnCredRefreshNeeded := !isTurnQuota && (turnAllocAttrMissing ||
 						strings.Contains(errStrLower, "turn allocate auth") ||
 						strings.Contains(errStrLower, "invalid credential") ||
 						strings.Contains(errStrLower, "stale nonce") ||
 						strings.Contains(errStrLower, "allocation mismatch") ||
-						strings.Contains(errStrLower, "error 508")
+						strings.Contains(errStrLower, "error 508"))
 
 					if hint := workerErrorHint(sessErr); hint != "" {
 						errStr += " | " + hint
@@ -245,7 +246,9 @@ func WorkerGroup(
 					}
 
 					attempt++
-					if turnAllocAttrMissing {
+					if isTurnQuota {
+						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
+					} else if turnAllocAttrMissing {
 						log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
 						refreshCreds("TURN Allocate attribute-not-found")
 					} else if turnCredRefreshNeeded {
@@ -255,7 +258,6 @@ func WorkerGroup(
 						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
 					}
 
-					// Если ошибка STUN (credentials invalid), воркер не сможет переподключиться. Завершаем.
 					isStunDeath := strings.Contains(errStrLower, "error 29") ||
 						strings.Contains(errStrLower, "cannot create socket")
 
@@ -269,8 +271,13 @@ func WorkerGroup(
 					return
 				}
 
-				retryDelay := time.Duration(min(2<<uint(attempt-1), 30)) * time.Second
-				retryDelay += time.Duration(rand.Intn(3)) * time.Second
+				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
+				if sessErr != nil {
+					errStrLower2 := strings.ToLower(sessErr.Error())
+					if strings.Contains(errStrLower2, "quota") || strings.Contains(sessErr.Error(), "486") {
+						retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+					}
+				}
 				select {
 				case <-time.After(retryDelay):
 				case <-ctx.Done():
@@ -324,10 +331,11 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host    string
-	Port    string
-	Hashes  []string
-	WrapKey []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	Host     string
+	Port     string
+	Hashes   []string
+	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	ObfsMode string // "audio" or "video" — RTP masking mode
 }
 
 // Credentials — учетные данные TURN
