@@ -18,6 +18,7 @@ Profile Management:
   remove <name>               Remove a profile (alias: rm)
   list                        Show all profiles (alias: ls)
   show <name>                 Show profile details (alias: sh)
+  share <name>                Show profile share link and QR code
   enable <name>               Enable a profile (alias: en)
   disable <name>              Disable a profile (alias: dis)
 
@@ -105,6 +106,8 @@ func main() {
 		listCmd()
 	case "show", "sh":
 		showCmd()
+	case "share":
+		shareCmd()
 	case "enable", "en":
 		enableCmd()
 	case "disable", "dis":

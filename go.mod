@@ -32,6 +32,8 @@ require (
 
 require (
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
+	github.com/mdp/qrterminal v1.0.1 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )

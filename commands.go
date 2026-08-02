@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mdp/qrterminal"
 )
 
 func addCmd() {
@@ -640,4 +642,59 @@ func debugCmd() {
 	} else {
 		fmt.Printf("  [ERROR] %v\n", err)
 	}
+}
+
+func shareCmd() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt share <name>\n")
+		os.Exit(1)
+	}
+
+	name := os.Args[2]
+	prof, err := loadProfile(name)
+	if err != nil {
+		log.Fatalf("Ошибка загрузки профиля: %v", err)
+	}
+
+	// Get share URL
+	var link string
+	if prof.LinkFile != "" {
+		// Try to read original wdtt:// URL from link file
+		linkData, err := os.ReadFile(prof.LinkFile)
+		if err == nil {
+			link = strings.TrimSpace(string(linkData))
+		}
+	}
+
+	// Fallback: reconstruct from profile data
+	if link == "" {
+		// Parse PeerAddr (IP:PORT)
+		ip := ""
+		dtlsPort := ""
+		if idx := strings.LastIndex(prof.PeerAddr, ":"); idx != -1 {
+			ip = prof.PeerAddr[:idx]
+			dtlsPort = prof.PeerAddr[idx+1:]
+		} else {
+			ip = prof.PeerAddr
+		}
+
+		// Build hashes string
+		hashStr := strings.Join(prof.Hashes, ",")
+
+		// Use profile name as the display name
+		displayName := name
+		if strings.HasPrefix(name, "ro-") {
+			displayName = name[3:] // strip "ro-" prefix for display
+		}
+
+		// Reconstruct wdtt:// URL with defaults for missing PORT2 (0) and PORT3 (9000)
+		link = fmt.Sprintf("wdtt://%s:%s:0:9000:%s:%s#%s", ip, dtlsPort, prof.Password, hashStr, displayName)
+	}
+
+	// Output
+	fmt.Printf("Профиль: %s\n", name)
+	fmt.Printf("Ссылка: %s\n\n", link)
+	fmt.Println("QR-код:")
+	qrterminal.Generate(link, qrterminal.L, os.Stdout)
+	fmt.Println()
 }

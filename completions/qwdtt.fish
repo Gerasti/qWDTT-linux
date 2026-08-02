@@ -39,6 +39,7 @@ complete -c qwdtt -n __fish_use_subcommand -a edit -d "Edit profile"
 complete -c qwdtt -n __fish_use_subcommand -a remove -d "Remove profile"
 complete -c qwdtt -n __fish_use_subcommand -a list -d "List profiles"
 complete -c qwdtt -n __fish_use_subcommand -a show -d "Show profile"
+complete -c qwdtt -n __fish_use_subcommand -a share -d "Show profile share link and QR code"
 complete -c qwdtt -n __fish_use_subcommand -a enable -d "Enable profile"
 complete -c qwdtt -n __fish_use_subcommand -a disable -d "Disable profile"
 complete -c qwdtt -n __fish_use_subcommand -a device-id -d "Show/set Device ID"
@@ -57,7 +58,7 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l timeout -d "Connectio
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
 
 # show, remove - all profile names
-complete -c qwdtt -n "__qwdtt_seen_command show sh remove rm" -a "(__qwdtt_all_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command show sh remove rm share" -a "(__qwdtt_all_profiles)" -d "Profile"
 
 # enable/en - only disabled profiles
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Profile"

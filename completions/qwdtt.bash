@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove list show enable disable device-id regenerate-id version help"
+        local commands="connect disconnect debug add edit remove list show share enable disable device-id regenerate-id version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -52,7 +52,7 @@ _qwdtt_completions() {
                 COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
             fi
             ;;
-        show|remove)
+        show|remove|share)
             if [[ $COMP_CWORD -eq 2 ]]; then
                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
