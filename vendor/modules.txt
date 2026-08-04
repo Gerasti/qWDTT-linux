@@ -1,3 +1,6 @@
+# github.com/MakeNowJust/heredoc/v2 v2.0.1
+## explicit; go 1.12
+github.com/MakeNowJust/heredoc/v2
 # github.com/andybalholm/brotli v1.2.0
 ## explicit; go 1.22
 github.com/andybalholm/brotli
@@ -63,9 +66,15 @@ github.com/bogdanfinn/websocket
 # github.com/cbeuw/connutil v1.0.1
 ## explicit; go 1.25
 github.com/cbeuw/connutil
+# github.com/go-ini/ini v1.67.0
+## explicit
+github.com/go-ini/ini
 # github.com/godbus/dbus/v5 v5.2.2
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
+# github.com/google/btree v1.1.2
+## explicit; go 1.18
+github.com/google/btree
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
@@ -140,26 +149,39 @@ github.com/quic-go/qpack
 # github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5
 ## explicit
 github.com/tam7t/hpkp
+# github.com/things-go/go-socks5 v0.0.5
+## explicit; go 1.18
+github.com/things-go/go-socks5
+github.com/things-go/go-socks5/bufferpool
+github.com/things-go/go-socks5/statute
+# github.com/windtf/wireproxy v1.1.2
+## explicit; go 1.26.0
+github.com/windtf/wireproxy
 # github.com/wlynxg/anet v0.0.5
 ## explicit; go 1.20
 github.com/wlynxg/anet
 # golang.org/x/crypto v0.52.0
 ## explicit; go 1.25.0
+golang.org/x/crypto/blake2s
 golang.org/x/crypto/chacha20
 golang.org/x/crypto/chacha20poly1305
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
+golang.org/x/crypto/curve25519
 golang.org/x/crypto/hkdf
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/internal/poly1305
+golang.org/x/crypto/poly1305
 golang.org/x/crypto/sha3
 # golang.org/x/net v0.54.0
 ## explicit; go 1.25.0
 golang.org/x/net/bpf
+golang.org/x/net/dns/dnsmessage
 golang.org/x/net/http/httpguts
 golang.org/x/net/http/httpproxy
 golang.org/x/net/http2
 golang.org/x/net/http2/hpack
+golang.org/x/net/icmp
 golang.org/x/net/idna
 golang.org/x/net/internal/httpcommon
 golang.org/x/net/internal/httpsfv
@@ -184,6 +206,70 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
+# golang.org/x/time v0.14.0
+## explicit; go 1.24.0
+golang.org/x/time/rate
+# golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
+## explicit; go 1.17
+golang.zx2c4.com/wintun
+# golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
+## explicit; go 1.20
+golang.zx2c4.com/wireguard/conn
+golang.zx2c4.com/wireguard/conn/winrio
+golang.zx2c4.com/wireguard/device
+golang.zx2c4.com/wireguard/ipc
+golang.zx2c4.com/wireguard/ipc/namedpipe
+golang.zx2c4.com/wireguard/ratelimiter
+golang.zx2c4.com/wireguard/replay
+golang.zx2c4.com/wireguard/rwcancel
+golang.zx2c4.com/wireguard/tai64n
+golang.zx2c4.com/wireguard/tun
+golang.zx2c4.com/wireguard/tun/netstack
+# gvisor.dev/gvisor v0.0.0-20230927004350-cbd86285d259
+## explicit; go 1.20
+gvisor.dev/gvisor/pkg/atomicbitops
+gvisor.dev/gvisor/pkg/bits
+gvisor.dev/gvisor/pkg/buffer
+gvisor.dev/gvisor/pkg/context
+gvisor.dev/gvisor/pkg/cpuid
+gvisor.dev/gvisor/pkg/gohacks
+gvisor.dev/gvisor/pkg/goid
+gvisor.dev/gvisor/pkg/linewriter
+gvisor.dev/gvisor/pkg/log
+gvisor.dev/gvisor/pkg/rand
+gvisor.dev/gvisor/pkg/refs
+gvisor.dev/gvisor/pkg/sleep
+gvisor.dev/gvisor/pkg/state
+gvisor.dev/gvisor/pkg/state/wire
+gvisor.dev/gvisor/pkg/sync
+gvisor.dev/gvisor/pkg/sync/locking
+gvisor.dev/gvisor/pkg/tcpip
+gvisor.dev/gvisor/pkg/tcpip/adapters/gonet
+gvisor.dev/gvisor/pkg/tcpip/checksum
+gvisor.dev/gvisor/pkg/tcpip/hash/jenkins
+gvisor.dev/gvisor/pkg/tcpip/header
+gvisor.dev/gvisor/pkg/tcpip/header/parse
+gvisor.dev/gvisor/pkg/tcpip/internal/tcp
+gvisor.dev/gvisor/pkg/tcpip/link/channel
+gvisor.dev/gvisor/pkg/tcpip/network/hash
+gvisor.dev/gvisor/pkg/tcpip/network/internal/fragmentation
+gvisor.dev/gvisor/pkg/tcpip/network/internal/ip
+gvisor.dev/gvisor/pkg/tcpip/network/internal/multicast
+gvisor.dev/gvisor/pkg/tcpip/network/ipv4
+gvisor.dev/gvisor/pkg/tcpip/network/ipv6
+gvisor.dev/gvisor/pkg/tcpip/ports
+gvisor.dev/gvisor/pkg/tcpip/seqnum
+gvisor.dev/gvisor/pkg/tcpip/stack
+gvisor.dev/gvisor/pkg/tcpip/transport
+gvisor.dev/gvisor/pkg/tcpip/transport/icmp
+gvisor.dev/gvisor/pkg/tcpip/transport/internal/network
+gvisor.dev/gvisor/pkg/tcpip/transport/internal/noop
+gvisor.dev/gvisor/pkg/tcpip/transport/packet
+gvisor.dev/gvisor/pkg/tcpip/transport/raw
+gvisor.dev/gvisor/pkg/tcpip/transport/tcp
+gvisor.dev/gvisor/pkg/tcpip/transport/tcpconntrack
+gvisor.dev/gvisor/pkg/tcpip/transport/udp
+gvisor.dev/gvisor/pkg/waiter
 # rsc.io/qr v0.2.0
 ## explicit
 rsc.io/qr

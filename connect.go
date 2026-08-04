@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 
 	"qwdtt/internal/core"
 )
+
 func connectCmd() {
 	var profileName string
 
@@ -24,6 +26,8 @@ func connectCmd() {
 	timeout := fs.Int("timeout", 120, "Connection timeout in seconds (for -auto-switch)")
 	dns := fs.String("dns", "yandex", "DNS resolver (yandex|cloudflare|google|doh-yandex|doh-cloudflare|doh-google|custom:IP:PORT|doh:https://...)")
 	captcha := fs.String("captcha", "auto", "Captcha bypass mode (auto|rjs)")
+	mode := fs.String("mode", "kernel", "Connection mode (kernel|socks)")
+	socksPort := fs.Int("socks-port", 9050, "SOCKS5 port (only with -mode socks)")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -113,7 +117,7 @@ func connectCmd() {
 					}
 				}
 
-				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *captcha, *timeout, *autoSwitch, sigCh, stopCh)
+				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *captcha, *timeout, *autoSwitch, *mode, *socksPort, sigCh, stopCh)
 				if success {
 					return
 				}
@@ -149,7 +153,7 @@ func connectCmd() {
 	}
 }
 
-func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg, captchaMode string, timeoutSec int, autoSwitch bool, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
+func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg, captchaMode string, timeoutSec int, autoSwitch bool, mode string, socksPort int, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
@@ -174,6 +178,8 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 		CaptchaMode: captchaMode,
 		MTU:         mtu,
 		DNS:         dnsArg,
+		Mode:        mode,
+		SocksPort:   socksPort,
 	}
 
 	if hashesOverride != "" {
@@ -183,13 +189,18 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 		}
 	}
 
-	if cfg.Listen == "" {
+	if mode == "socks" {
+		cfg.Listen = "127.0.0.1:9001"
+	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:9000"
 	}
 
 	fmt.Printf("Подключение к профилю '%s'...\n", profileName)
 	fmt.Printf("  Peer: %s\n", cfg.PeerAddr)
 	fmt.Printf("  Workers: %d\n", cfg.Workers)
+	if mode == "socks" {
+		fmt.Printf("  Mode: SOCKS5 on port %d\n", socksPort)
+	}
 
 	if err := setActiveProfile(profileName); err != nil {
 		fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
@@ -218,6 +229,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	wgConfigured := false
 	wgTested := false
 	var coreInstance *core.Core
+	var wr *core.WireproxyRunner
 	coreInstance = c
 
 	// stdin reader for CAPTCHA_RESULT protocol
@@ -251,6 +263,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			if wgConfigured {
 				teardownWG()
 			}
+			if wr != nil {
+				wr.Stop()
+			}
 			clearActiveProfile()
 			return false, false
 		case <-stopCh:
@@ -258,6 +273,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			if wgConfigured {
 				fmt.Println("\n[*] Удаление WireGuard интерфейса...")
 				teardownWG()
+			}
+			if wr != nil {
+				wr.Stop()
 			}
 			clearActiveProfile()
 			return false, false
@@ -267,12 +285,18 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			if wgConfigured {
 				teardownWG()
 			}
+			if wr != nil {
+				wr.Stop()
+			}
 			clearActiveProfile()
 			return false, true
 		case ev, ok := <-events:
 			if !ok {
 				if wgConfigured {
 					teardownWG()
+				}
+				if wr != nil {
+					wr.Stop()
 				}
 				return false, false
 			}
@@ -292,6 +316,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wgConfigured {
 						teardownWG()
 					}
+					if wr != nil {
+						wr.Stop()
+					}
 					clearActiveProfile()
 					return false, false
 				}
@@ -306,6 +333,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wgConfigured {
 						teardownWG()
 					}
+					if wr != nil {
+						wr.Stop()
+					}
 					clearActiveProfile()
 					return false, false
 				}
@@ -315,34 +345,53 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 				if ev.Name == "wg_config" && !wgConfigured {
 					wgConfigured = true
 					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
-					turnIPs := coreInstance.GetTurnIPs()
-					fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
-					if err := applyWGConfig(ev.Data, turnIPs); err != nil {
-						fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
-						fmt.Println("  Убедитесь, что:")
-						fmt.Println("  1. Команды ip и wg доступны")
-						fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
-						c.Stop()
-						clearActiveProfile()
-						return false, false
-					}
-					fmt.Println("[OK] WireGuard интерфейс настроен и активен")
 
-					fmt.Println("[*] Проверка работоспособности туннеля...")
-					time.Sleep(2 * time.Second)
-					if err := testWGConnectivity(); err != nil {
-						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
-						c.Stop()
-						teardownWG()
-						clearActiveProfile()
-						return false, false
-					}
-					fmt.Println("[OK] Туннель работает корректно")
-					fmt.Println("[*] Весь трафик теперь идет через VPN")
-					wgTested = true
+					if mode == "socks" {
+						// SOCKS5 mode: use wireproxy for userspace WireGuard + SOCKS5
+						wr = core.NewWireproxyRunner(socksPort)
+						if err := wr.Start(context.Background(), ev.Data); err != nil {
+							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
+							c.Stop()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						wgTested = true // Mark as tested so we can exit the connection loop
 
-					if timeout != nil {
-						timeout.Stop()
+						if timeout != nil {
+							timeout.Stop()
+						}
+					} else {
+						// Kernel mode: configure WG interface as before
+						turnIPs := coreInstance.GetTurnIPs()
+						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
+						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
+							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
+							fmt.Println("  Убедитесь, что:")
+							fmt.Println("  1. Команды ip и wg доступны")
+							fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
+							c.Stop()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
+
+						fmt.Println("[*] Проверка работоспособности туннеля...")
+						time.Sleep(2 * time.Second)
+						if err := testWGConnectivity(); err != nil {
+							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+							c.Stop()
+							teardownWG()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Println("[OK] Туннель работает корректно")
+						fmt.Println("[*] Весь трафик теперь идет через VPN")
+						wgTested = true
+
+						if timeout != nil {
+							timeout.Stop()
+						}
 					}
 
 				} else if ev.Name == "captcha_required" {
@@ -378,6 +427,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							fmt.Printf("[!] Ошибка при удалении интерфейса: %v\n", err)
 						}
 					}
+					if wr != nil {
+						wr.Stop()
+					}
 					fmt.Println("[*] Завершено")
 					clearActiveProfile()
 					return true, false
@@ -389,6 +441,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							fmt.Printf("[!] Ошибка при удалении интерфейса: %v\n", err)
 						}
 					}
+					if wr != nil {
+						wr.Stop()
+					}
 					clearActiveProfile()
 					return false, false
 				case <-suspendCh:
@@ -397,32 +452,33 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wgConfigured {
 						teardownWG()
 					}
-					return false, true
-					fmt.Println("\n[*] Обнаружен resume, переподключение...")
-					c.Stop()
-					if wgConfigured {
-						teardownWG()
+					if wr != nil {
+						wr.Stop()
 					}
-					clearActiveProfile()
-					return false, false
+					return false, true
 				case <-func() <-chan time.Time {
 					if healthCheckTicker != nil {
 						return healthCheckTicker.C
 					}
 					return make(<-chan time.Time)
 				}():
-					if err := testWGConnectivity(); err != nil {
-						fmt.Printf("\n[ERROR] Туннель перестал работать: %v\n", err)
-						c.Stop()
-						if wgConfigured {
-							teardownWG()
+					if mode == "kernel" {
+						if err := testWGConnectivity(); err != nil {
+							fmt.Printf("\n[ERROR] Туннель перестал работать: %v\n", err)
+							c.Stop()
+							if wgConfigured {
+								teardownWG()
+							}
+							return false, false
 						}
-						return false, false
 					}
 				case ev, ok := <-events:
 					if !ok {
 						if wgConfigured {
 							teardownWG()
+						}
+						if wr != nil {
+							wr.Stop()
 						}
 						return false, false
 					}
@@ -433,6 +489,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							fmt.Println("[*] Отключено")
 							if wgConfigured {
 								teardownWG()
+							}
+							if wr != nil {
+								wr.Stop()
 							}
 							return false, false
 						}
@@ -451,4 +510,3 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 		}
 	}
 }
-

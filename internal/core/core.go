@@ -24,6 +24,9 @@ type Config struct {
 	CaptchaMode string
 	MTU         int
 	DNS         string
+	Mode        string
+	SocksPort   int
+	WGRawConfig string
 }
 
 // EventType — тип события от ядра.
@@ -110,6 +113,12 @@ func New(cfg Config) *Core {
 	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 9
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = "kernel"
+	}
+	if cfg.SocksPort <= 0 {
+		cfg.SocksPort = 9050
 	}
 	c := &Core{
 		cfg:               cfg,
@@ -223,27 +232,29 @@ func (c *Core) Start() (<-chan Event, error) {
 
 	disp := NewDispatcher(ctx, localConn, stats)
 
-	configCh := make(chan string, 1)
+configCh := make(chan string, 1)
 
-	go func() {
-		select {
-		case rawConf, ok := <-configCh:
-			if !ok || rawConf == "" {
-				return
+		go func() {
+			select {
+			case rawConf, ok := <-configCh:
+				if !ok || rawConf == "" {
+					return
+				}
+				finalConf := patchWGConfig(rawConf, c.cfg.MTU)
+				c.emit(Event{Type: EventEvent, Name: "wg_config", Data: finalConf})
+			case <-ctx.Done():
 			}
-			finalConf := patchWGConfig(rawConf, c.cfg.MTU)
-			c.emit(Event{Type: EventEvent, Name: "wg_config", Data: finalConf})
-		case <-ctx.Done():
-		}
-	}()
+		}()
 
-	c.emit(Event{Type: EventState, Status: "connecting"})
+		c.emit(Event{Type: EventState, Status: "connecting"})
 
-	go func() {
+go func() {
 		defer close(c.events)
 		defer disp.Shutdown()
 		defer cancel()
-		defer func() { _ = localConn.Close() }()
+		defer func() {
+			_ = localConn.Close()
+		}()
 
 		var wg sync.WaitGroup
 		workerIDCounter := 1

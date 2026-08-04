@@ -26,7 +26,8 @@ Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
                               If profile is not specified, interactive selection
                               Disabled profiles can be used by explicitly specifying name
-  disconnect                  Disconnect from VPN (alias: discon)
+  disconnect [profile]        Disconnect from VPN (alias: discon)
+                              If profile is not specified, disconnects active profile
   debug                       Show debug information about current connection
                               (e.g., watch -n 1 qwdtt debug)
 
@@ -43,18 +44,23 @@ Connect Flags:
   -mtu N                      Tunnel MTU (default: 1280, max: 1500)
   -hashes H1,H2               Override profile VK hashes
   -dns RESOLVER               DNS resolver (default: yandex)
-                              Options: yandex, cloudflare, google,
-                              doh-yandex, doh-cloudflare, doh-google,
-                              custom:8.8.8.8:53,1.1.1.1:53
-                              doh:https://dns.example.com/dns-query
+                               Options: yandex, cloudflare, google,
+                               doh-yandex, doh-cloudflare, doh-google,
+                               custom:8.8.8.8:53,1.1.1.1:53
+                               doh:https://dns.example.com/dns-query
   -captcha MODE               Captcha bypass mode (default: auto)
                                Options: auto, rjs, wv
                                auto - Go solver with WebView fallback
                                rjs  - pure Go solver only
                                wv   - external WebView solver (via CAPTCHA_SOLVE protocol)
   -auto-switch                Auto-switch to other profiles on failure
-                              (uses enabled profiles only)
+                               (uses enabled profiles only)
   -timeout N                  Timeout for -auto-switch in seconds (default: 120)
+  -mode MODE                  Connection mode (default: kernel)
+                               Options: kernel - direct kernel WireGuard
+                                        socks - local SOCKS5 proxy
+  -socks-port PORT            SOCKS5 port (default: 9050)
+                                 Required with -mode socks
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)
@@ -71,7 +77,8 @@ Examples:
   qwdtt con myserver -captcha rjs  # connect with pure Go captcha solver
   qwdtt con myserver -auto-switch  # with auto-switching on failure
   qwdtt debug                      # show current connection stats
-  qwdtt discon                     # disconnect from VPN
+  qwdtt discon                     # disconnect active profile
+  qwdtt discon myserver            # disconnect specific profile
   qwdtt dis myserver               # disable profile (alias for disable)
   qwdtt con disabled-profile       # can connect by explicitly specifying name
   qwdtt en myserver                # enable profile (alias for enable)

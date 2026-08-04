@@ -183,14 +183,15 @@ func listCmd() {
 	maxNameLen := 0
 	maxPeerLen := 0
 
-	activeProfile := getActiveProfile()
-
 	// ANSI color codes
 	const (
 		colorReset = "\033[0m"
 		colorGreen = "\033[32m"
 		colorRed   = "\033[31m"
 	)
+
+	// Get list of currently running profiles
+	runningProfiles := getRunningProfiles()
 
 	// Read profiles from both directories
 	readProfilesFromDir := func(dir string, isReadOnly bool) {
@@ -225,7 +226,7 @@ func listCmd() {
 				hashes:   len(prof.Hashes),
 				status:   status,
 				priority: prof.Priority,
-				active:   name == activeProfile,
+				active:   isProfileRunning(name, runningProfiles),
 				readOnly: isReadOnly,
 			}
 
@@ -550,14 +551,80 @@ func listDisabledProfileNames() []string {
 	return names
 }
 
+// Get list of currently running profiles by checking process command lines
+func getRunningProfiles() map[string]bool {
+	running := make(map[string]bool)
+	
+	// Get all qwdtt processes
+	cmd := exec.Command("pgrep", "-f", "qwdtt")
+	output, err := cmd.Output()
+	if err != nil {
+		return running // Return empty map on error
+	}
+	
+	pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, pidStr := range pids {
+		pidStr = strings.TrimSpace(pidStr)
+		if pidStr == "" {
+			continue
+		}
+		
+		// Check command line for profile name
+		cmdlinePath := fmt.Sprintf("/proc/%s/cmdline", pidStr)
+		cmdlineData, err := os.ReadFile(cmdlinePath)
+		if err != nil {
+			continue
+		}
+		
+		// Command line is null-separated, replace nulls with spaces for easier parsing
+		cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
+		
+		// Look for profile name pattern: con <profile> or con followed by profile as arg
+		// Also check for the profile being passed as positional argument
+		fields := strings.Fields(cmdline)
+		for i, field := range fields {
+			if field == "con" && i+1 < len(fields) {
+				// Next field might be the profile name
+				profile := fields[i+1]
+				// Skip if it looks like a flag
+				if !strings.HasPrefix(profile, "-") {
+					running[profile] = true
+				}
+			}
+			// Also check for patterns like "con profile-name"
+			if strings.Contains(field, "con ") {
+				parts := strings.Split(field, " ")
+				for _, part := range parts {
+					if part != "con" && !strings.HasPrefix(part, "-") && part != "" {
+						running[part] = true
+					}
+				}
+			}
+		}
+	}
+	
+	return running
+}
+
+// Check if a profile is currently running
+func isProfileRunning(profile string, runningProfiles map[string]bool) bool {
+	return runningProfiles[profile]
+}
+
 func disconnectCmd() {
-	activeProfile := getActiveProfile()
-	if activeProfile == "" {
-		fmt.Println("[!] Нет активного подключения")
+	var targetProfile string
+	if len(os.Args) >= 3 {
+		targetProfile = os.Args[2]
+	} else {
+		targetProfile = getActiveProfile()
+	}
+
+	if targetProfile == "" {
+		fmt.Println("[!] Нет активного подключения и профиль не указан")
 		os.Exit(1)
 	}
 
-	fmt.Printf("[*] Отключение профиля '%s'...\n", activeProfile)
+	fmt.Printf("[*] Отключение профиля '%s'...\n", targetProfile)
 
 	cmd := exec.Command("pgrep", "-f", "qwdtt")
 	output, err := cmd.Output()
@@ -571,9 +638,18 @@ func disconnectCmd() {
 				continue
 			}
 
-			fmt.Printf("[*] Завершение процесса qwdtt (PID: %s)...\n", pid)
-			killCmd := exec.Command("kill", "-INT", pid)
-			killCmd.Run()
+			// Check if this process is running the target profile
+			cmdlinePath := fmt.Sprintf("/proc/%s/cmdline", pid)
+			cmdlineData, err := os.ReadFile(cmdlinePath)
+			if err != nil {
+				continue
+			}
+			cmdline := string(cmdlineData)
+			if strings.Contains(cmdline, targetProfile) {
+				fmt.Printf("[*] Завершение процесса qwdtt (PID: %s) для профиля '%s'...\n", pid, targetProfile)
+				killCmd := exec.Command("kill", "-INT", pid)
+				killCmd.Run()
+			}
 		}
 
 		time.Sleep(2 * time.Second)
@@ -584,18 +660,30 @@ func disconnectCmd() {
 				continue
 			}
 
-			if exec.Command("kill", "-0", pid).Run() == nil {
-				fmt.Printf("[*] Принудительное завершение PID: %s...\n", pid)
-				exec.Command("kill", "-9", pid).Run()
+			cmdlinePath := fmt.Sprintf("/proc/%s/cmdline", pid)
+			cmdlineData, err := os.ReadFile(cmdlinePath)
+			if err != nil {
+				continue
+			}
+			cmdline := string(cmdlineData)
+			if strings.Contains(cmdline, targetProfile) {
+				if exec.Command("kill", "-0", pid).Run() == nil {
+					fmt.Printf("[*] Принудительное завершение PID: %s...\n", pid)
+					exec.Command("kill", "-9", pid).Run()
+				}
 			}
 		}
 	}
 
-	if err := teardownWG(); err == nil {
-		fmt.Println("[OK] WireGuard интерфейс удален")
+	// If disconnecting the active profile, clear it
+	activeProfile := getActiveProfile()
+	if activeProfile == targetProfile {
+		if err := teardownWG(); err == nil {
+			fmt.Println("[OK] WireGuard интерфейс удален")
+		}
+		clearActiveProfile()
 	}
 
-	clearActiveProfile()
 	fmt.Println("[OK] Отключено")
 }
 
