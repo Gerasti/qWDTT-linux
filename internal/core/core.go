@@ -204,6 +204,9 @@ func (c *Core) Start() (<-chan Event, error) {
 	emitCaptchaRequest := func(mode, redirectURI, sessionToken string) {
 		c.emit(Event{Type: EventEvent, Name: "captcha_required", Data: mode + "|" + redirectURI + "|" + sessionToken})
 	}
+	emitLog := func(msg string) {
+		c.emit(Event{Type: EventLog, Message: msg})
+	}
 
 	shutdownCh := make(chan struct{})
 	go func() {
@@ -292,13 +295,14 @@ go func() {
 				WorkerGroup(ctx, groupID, startHashIndex, tp, peer, disp, localPort,
 					isFirstGroup, configChan, workerIds, &c.pauseFlag,
 					c.cfg.DeviceID, c.cfg.Password, stats, waitR, sigR,
-					c.CaptchaResultChan, c.getCaptchaMode, emitCaptchaRequest, c.AddTurnIPs)
+					c.CaptchaResultChan, c.getCaptchaMode, emitCaptchaRequest, c.AddTurnIPs, emitLog)
 			}(gID, isFirst, cc, ids, g, myWaitReady, mySignalReady)
 		}
 
 		wg.Wait()
 		close(configCh)
 		log.Println("[CORE] все воркеры завершены")
+		c.emit(Event{Type: EventEvent, Name: "workers_completed"})
 	}()
 
 	return c.events, nil

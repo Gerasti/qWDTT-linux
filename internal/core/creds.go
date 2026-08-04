@@ -374,7 +374,7 @@ func vkDelayRandom(minMs, maxMs int) {
 
 // ─── Cached credential fetcher ───
 
-func getVkCredsCached(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string)) (string, string, []string, error) {
+func getVkCredsCached(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string), emitLog func(msg string)) (string, string, []string, error) {
 	cache := getStreamCache(streamID)
 	cacheID := getCacheID(streamID)
 
@@ -398,7 +398,7 @@ func getVkCredsCached(ctx context.Context, link string, streamID int, deviceID s
 		return cache.creds.Username, cache.creds.Password, cloneStringSlice(cache.creds.ServerAddrs), nil
 	}
 
-	user, pass, addrs, err := fetchVkCredsSerialized(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
+	user, pass, addrs, err := fetchVkCredsSerialized(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest, emitLog)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -420,7 +420,7 @@ var (
 	globalLastVkFetchTime time.Time
 )
 
-func fetchVkCredsSerialized(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string)) (string, string, []string, error) {
+func fetchVkCredsSerialized(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string), emitLog func(msg string)) (string, string, []string, error) {
 	vkRequestMu.Lock()
 	defer vkRequestMu.Unlock()
 
@@ -442,12 +442,12 @@ func fetchVkCredsSerialized(ctx context.Context, link string, streamID int, devi
 		globalLastVkFetchTime = time.Now()
 	}()
 
-	return fetchVkCreds(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
+	return fetchVkCreds(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest, emitLog)
 }
 
 // ─── Main credential fetcher (rotates through stable credential sets) ───
 
-func fetchVkCreds(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string)) (string, string, []string, error) {
+func fetchVkCreds(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string), emitLog func(msg string)) (string, string, []string, error) {
 	if time.Now().Unix() < globalCaptchaLockout.Load() {
 		return "", "", nil, fmt.Errorf("CAPTCHA_WAIT_REQUIRED: global lockout active")
 	}
@@ -456,6 +456,9 @@ func fetchVkCreds(ctx context.Context, link string, streamID int, deviceID strin
 		log.Printf("[STREAM %d] [VKCalls] VK anon path: vkcalls", streamID)
 		if user, pass, addrs, err := getVKCredsViaVKCallsPath(ctx, link, streamID); err == nil {
 			log.Printf("[STREAM %d] [VK Auth] Success via VK Calls path", streamID)
+			if emitLog != nil {
+				emitLog(fmt.Sprintf("[STREAM %d] [VK Auth] Success via VK Calls path", streamID))
+			}
 			return user, pass, addrs, nil
 		} else {
 			if callErr, ok := asCallUnavailableError(err); ok {
@@ -479,6 +482,9 @@ func fetchVkCreds(ctx context.Context, link string, streamID int, deviceID strin
 
 		if err == nil {
 			log.Printf("[STREAM %d] [VK Auth] Success with client_id=%s", streamID, creds.ClientID)
+			if emitLog != nil {
+				emitLog(fmt.Sprintf("[STREAM %d] [VK Auth] Success with client_id=%s", streamID, creds.ClientID))
+			}
 			return user, pass, addrs, nil
 		}
 
@@ -1234,8 +1240,8 @@ func isWebViewCaptchaTimeout(err error) bool {
 }
 
 // GetCreds returns TURN credentials for a given stream.
-func GetCreds(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string)) (string, string, []string, error) {
-	return getVkCredsCached(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
+func GetCreds(ctx context.Context, link string, streamID int, deviceID string, captchaResultChan chan string, getCaptchaMode func() string, emitCaptchaRequest func(mode, redirectURI, sessionToken string), emitLog func(msg string)) (string, string, []string, error) {
+	return getVkCredsCached(ctx, link, streamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest, emitLog)
 }
 
 func goDNSServersForPreset(preset string) []string {

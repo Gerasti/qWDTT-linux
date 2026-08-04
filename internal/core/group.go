@@ -39,6 +39,7 @@ func WorkerGroup(
 	getCaptchaMode func() string,
 	emitCaptchaRequest func(mode, redirectURI, sessionToken string),
 	onTurnURLs func(urls []string),
+	emitLog func(msg string),
 ) {
 	// Каскадный запуск: ждем свою очередь
 	if waitReady != nil {
@@ -84,7 +85,7 @@ func WorkerGroup(
 			case <-credsCtx.Done():
 			}
 		}()
-		user, pass, turnURLs, err := GetCreds(credsCtx, hash, credStreamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
+		user, pass, turnURLs, err := GetCreds(credsCtx, hash, credStreamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest, emitLog)
 		credsCancel()
 		if err == nil {
 			creds = &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: credStreamID}
@@ -131,7 +132,7 @@ func WorkerGroup(
 		getStreamCache(credStreamID).invalidate(credStreamID)
 		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer refreshCancel()
-		u, p, urls, refreshErr := GetCreds(refreshCtx, hash, credStreamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest)
+		u, p, urls, refreshErr := GetCreds(refreshCtx, hash, credStreamID, deviceID, captchaResultChan, getCaptchaMode, emitCaptchaRequest, emitLog)
 		if refreshErr != nil {
 			log.Printf("[TURN] Не удалось обновить креды после %s: %v", reason, refreshErr)
 			return false

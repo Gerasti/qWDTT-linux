@@ -156,6 +156,7 @@ func connectCmd() {
 func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg, captchaMode string, timeoutSec int, autoSwitch bool, mode string, socksPort int, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
 	prof, err := loadProfile(profileName)
 	if err != nil {
+		notifyError(profileName, "Ошибка загрузки профиля")
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
 		clearActiveProfile()
 		return false, false
@@ -209,6 +210,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	c := core.New(cfg)
 	events, err := c.Start()
 	if err != nil {
+		notifyError(profileName, "Ошибка запуска")
 		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
 		clearActiveProfile()
 		return false, false
@@ -218,12 +220,6 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	suspendStopCh := make(chan struct{})
 	defer close(suspendStopCh)
 	go monitorSuspendResume(suspendCh, suspendStopCh)
-
-	go func() {
-		<-sigCh
-		fmt.Println("\nОтключение...")
-		c.Stop()
-	}()
 
 	connected := false
 	wgConfigured := false
@@ -259,6 +255,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			return make(<-chan time.Time)
 		}():
 			fmt.Println("[!] Таймаут подключения")
+			notifyError(profileName, "Таймаут подключения")
 			c.Stop()
 			if wgConfigured {
 				teardownWG()
@@ -268,28 +265,6 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			}
 			clearActiveProfile()
 			return false, false
-		case <-stopCh:
-			c.Stop()
-			if wgConfigured {
-				fmt.Println("\n[*] Удаление WireGuard интерфейса...")
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
-			clearActiveProfile()
-			return false, false
-		case <-suspendCh:
-			fmt.Println("\n[*] Обнаружен resume, переподключение...")
-			c.Stop()
-			if wgConfigured {
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
-			clearActiveProfile()
-			return false, true
 		case ev, ok := <-events:
 			if !ok {
 				if wgConfigured {
@@ -298,6 +273,8 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 				if wr != nil {
 					wr.Stop()
 				}
+				notifyDisconnectedSync(profileName)
+				clearActiveProfile()
 				return false, false
 			}
 
@@ -325,9 +302,159 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			case core.EventLog:
 				if strings.Contains(ev.Message, "Конфиг получен") {
 					fmt.Printf("[OK] %s\n", ev.Message)
+				} else if strings.Contains(ev.Message, "[VK Auth] Success") {
+					notifyVKAuth(profileName)
 				} else if ev.Level == "ERROR" {
 					fmt.Printf("[ERROR] %s\n", ev.Message)
 				} else if strings.Contains(ev.Message, "FATAL") {
+					notifyError(profileName, ev.Message)
+					fmt.Printf("[!] %s\n", ev.Message)
+					c.Stop()
+					if wgConfigured {
+						teardownWG()
+					}
+					if wr != nil {
+						wr.Stop()
+					}
+					clearActiveProfile()
+					return false, false
+				}
+			case core.EventError:
+				fmt.Printf("[ERROR] %s\n", ev.Message)
+			case core.EventEvent:
+				if ev.Name == "wg_config" && !wgConfigured {
+					wgConfigured = true
+					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
+
+					if mode == "socks" {
+						wr = core.NewWireproxyRunner(socksPort)
+						if err := wr.Start(context.Background(), ev.Data); err != nil {
+							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
+							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
+							c.Stop()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						notifyConnected(profileName)
+						wgTested = true
+
+						if timeout != nil {
+							timeout.Stop()
+						}
+					} else {
+						turnIPs := coreInstance.GetTurnIPs()
+						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
+						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
+							notifyError(profileName, "Ошибка настройки WireGuard")
+							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
+							fmt.Println("  Убедитесь, что:")
+							fmt.Println("  1. Команды ip и wg доступны")
+							fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
+							c.Stop()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
+
+						fmt.Println("[*] Проверка работоспособности туннеля...")
+						time.Sleep(2 * time.Second)
+						if err := testWGConnectivity(); err != nil {
+							notifyError(profileName, "Туннель не работает")
+							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+							c.Stop()
+							teardownWG()
+							clearActiveProfile()
+							return false, false
+						}
+						fmt.Println("[OK] Туннель работает корректно")
+						fmt.Println("[*] Весь трафик теперь идет через VPN")
+						notifyConnected(profileName)
+						wgTested = true
+
+						if timeout != nil {
+							timeout.Stop()
+						}
+					}
+
+				} else if ev.Name == "workers_completed" {
+					fmt.Println("[*] All workers completed")
+					if wgConfigured {
+						teardownWG()
+					}
+					if wr != nil {
+						wr.Stop()
+					}
+					notifyDisconnectedSync(profileName)
+					clearActiveProfile()
+					return false, false
+				} else if ev.Name == "captcha_required" {
+					parts := strings.Split(ev.Data, "|")
+					if len(parts) >= 1 {
+						fmt.Printf("[!] Captcha required (mode: %s)\n", parts[0])
+					}
+				}
+			case core.EventStats:
+				if connected && wgTested && ev.RxBytes > 0 {
+					fmt.Printf("\r[STATS] RX: %s | TX: %s | Workers: %d   ",
+						formatBytes(ev.RxBytes),
+						formatBytes(ev.TxBytes),
+						ev.Workers)
+				}
+			}
+		case <-suspendCh:
+			fmt.Println("\n[*] Обнаружен resume, переподключение...")
+			c.Stop()
+			if wgConfigured {
+				teardownWG()
+			}
+			if wr != nil {
+				wr.Stop()
+			}
+			clearActiveProfile()
+			return false, true
+					case ev, ok := <-events:
+						if !ok {
+							if wgConfigured {
+								teardownWG()
+							}
+							if wr != nil {
+								wr.Stop()
+							}
+							notifyDisconnectedSync(profileName)
+							return false, false
+						}
+
+			switch ev.Type {
+			case core.EventState:
+				switch ev.Status {
+				case "connecting":
+					fmt.Println("[*] Подключение...")
+				case "running":
+					if !connected {
+						connected = true
+						fmt.Println("[OK] Туннель активен")
+					}
+				case "disconnected":
+					fmt.Println("[*] Отключено")
+					if wgConfigured {
+						teardownWG()
+					}
+					if wr != nil {
+						wr.Stop()
+					}
+					clearActiveProfile()
+					return false, false
+				}
+			case core.EventLog:
+				if strings.Contains(ev.Message, "Конфиг получен") {
+					fmt.Printf("[OK] %s\n", ev.Message)
+				} else if strings.Contains(ev.Message, "[VK Auth] Success") {
+					notifyVKAuth(profileName)
+				} else if ev.Level == "ERROR" {
+					fmt.Printf("[ERROR] %s\n", ev.Message)
+				} else if strings.Contains(ev.Message, "FATAL") {
+					notifyError(profileName, ev.Message)
 					fmt.Printf("[!] %s\n", ev.Message)
 					c.Stop()
 					if wgConfigured {
@@ -350,12 +477,14 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 						// SOCKS5 mode: use wireproxy for userspace WireGuard + SOCKS5
 						wr = core.NewWireproxyRunner(socksPort)
 						if err := wr.Start(context.Background(), ev.Data); err != nil {
+							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
 							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
 							c.Stop()
 							clearActiveProfile()
 							return false, false
 						}
 						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						notifyConnected(profileName)
 						wgTested = true // Mark as tested so we can exit the connection loop
 
 						if timeout != nil {
@@ -366,6 +495,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 						turnIPs := coreInstance.GetTurnIPs()
 						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
 						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
+							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
 							fmt.Println("  Убедитесь, что:")
 							fmt.Println("  1. Команды ip и wg доступны")
@@ -379,6 +509,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 						fmt.Println("[*] Проверка работоспособности туннеля...")
 						time.Sleep(2 * time.Second)
 						if err := testWGConnectivity(); err != nil {
+							notifyError(profileName, "Туннель не работает")
 							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
 							c.Stop()
 							teardownWG()
@@ -387,6 +518,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 						}
 						fmt.Println("[OK] Туннель работает корректно")
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
+						notifyConnected(profileName)
 						wgTested = true
 
 						if timeout != nil {
@@ -430,6 +562,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
+					notifyDisconnectedSync(profileName)
 					fmt.Println("[*] Завершено")
 					clearActiveProfile()
 					return true, false
@@ -444,6 +577,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
+					notifyDisconnectedSync(profileName)
 					clearActiveProfile()
 					return false, false
 				case <-suspendCh:
@@ -455,6 +589,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
+					notifyDisconnectedSync(profileName)
 					return false, true
 				case <-func() <-chan time.Time {
 					if healthCheckTicker != nil {
@@ -464,6 +599,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 				}():
 					if mode == "kernel" {
 						if err := testWGConnectivity(); err != nil {
+							notifyError(profileName, "Туннель перестал работать")
 							fmt.Printf("\n[ERROR] Туннель перестал работать: %v\n", err)
 							c.Stop()
 							if wgConfigured {
@@ -493,6 +629,7 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							if wr != nil {
 								wr.Stop()
 							}
+							notifyDisconnectedSync(profileName)
 							return false, false
 						}
 					case core.EventError:

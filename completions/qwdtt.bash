@@ -47,9 +47,11 @@ _qwdtt_completions() {
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
                 COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch -mode -socks-port" -- "$cur") )
             elif [[ $prev == "-captcha" ]]; then
                 COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
+            elif [[ $prev == "-mode" ]]; then
+                COMPREPLY=( $(compgen -W "kernel socks" -- "$cur") )
             fi
             ;;
         show|remove|share)
