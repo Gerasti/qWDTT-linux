@@ -51,7 +51,7 @@ _qwdtt_completions() {
             elif [[ $prev == "-captcha" ]]; then
                 COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
             elif [[ $prev == "-mode" ]]; then
-                COMPREPLY=( $(compgen -W "kernel socks" -- "$cur") )
+                COMPREPLY=( $(compgen -W "tun socks" -- "$cur") )
             fi
             ;;
         show|remove|share)

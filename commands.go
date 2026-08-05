@@ -171,13 +171,15 @@ func removeCmd() {
 
 func listCmd() {
 	type profileInfo struct {
-		name     string
-		peer     string
-		hashes   int
-		status   string
-		priority int
-		active   bool
-		readOnly bool
+		name      string
+		peer      string
+		hashes    int
+		status    string
+		priority  int
+		active    bool
+		mode      string // "tun" or "socks" (only set if active)
+		socksPort int    // SOCKS5 port (only set if active)
+		readOnly  bool
 	}
 
 	var regularProfiles []profileInfo
@@ -187,13 +189,15 @@ func listCmd() {
 
 	// ANSI color codes
 	const (
-		colorReset = "\033[0m"
-		colorGreen = "\033[32m"
-		colorRed   = "\033[31m"
+		colorReset  = "\033[0m"
+		colorGreen  = "\033[32m"
+		colorRed    = "\033[31m"
+		colorCyan   = "\033[36m"
+		colorYellow = "\033[33m"
 	)
 
-	// Get list of currently running profiles
-	runningProfiles := getRunningProfiles()
+	// Get list of currently running profiles with details (mode, socks port)
+	runningDetails := getRunningProfileDetails()
 
 	// Read profiles from both directories
 	readProfilesFromDir := func(dir string, isReadOnly bool) {
@@ -222,14 +226,25 @@ func listCmd() {
 				status = "disabled"
 			}
 
+			active := false
+			mode := ""
+			socksPort := 0
+			if d, ok := runningDetails[name]; ok {
+				active = true
+				mode = d.Mode
+				socksPort = d.SocksPort
+			}
+
 			info := profileInfo{
-				name:     name,
-				peer:     prof.PeerAddr,
-				hashes:   len(prof.Hashes),
-				status:   status,
-				priority: prof.Priority,
-				active:   isProfileRunning(name, runningProfiles),
-				readOnly: isReadOnly,
+				name:      name,
+				peer:      prof.PeerAddr,
+				hashes:    len(prof.Hashes),
+				status:    status,
+				priority:  prof.Priority,
+				active:    active,
+				mode:      mode,
+				socksPort: socksPort,
+				readOnly:  isReadOnly,
 			}
 
 			if isReadOnly {
@@ -253,10 +268,25 @@ func listCmd() {
 	// Read read-only profiles
 	readProfilesFromDir(filepath.Join(configDir(), "ro-profiles"), true)
 
+	// Sort profiles by priority (highest first), then by name
+	sortProfilesByPriority := func(profiles []profileInfo) {
+		sort.Slice(profiles, func(i, j int) bool {
+			if profiles[i].priority != profiles[j].priority {
+				return profiles[i].priority > profiles[j].priority
+			}
+			return profiles[i].name < profiles[j].name
+		})
+	}
+	sortProfilesByPriority(regularProfiles)
+	sortProfilesByPriority(readOnlyProfiles)
+
 	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 {
 		fmt.Println("Нет сохранённых профилей")
 		return
 	}
+
+	// Show autoswitch status with mode info
+	currentAutoswitchProfile := getAutoswitchCurrentProfile()
 
 	printProfiles := func(profiles []profileInfo, title string) {
 		if len(profiles) == 0 {
@@ -265,8 +295,28 @@ func listCmd() {
 		fmt.Printf("\n%s:\n", title)
 		for _, p := range profiles {
 			activeMarker := " "
+			modeStr := ""
 			if p.active {
 				activeMarker = "*"
+				if p.mode == "socks" {
+					modeStr = fmt.Sprintf(" [socks:%d]", p.socksPort)
+				} else {
+					modeStr = " [tun]"
+				}
+			}
+
+			// Mark current autoswitch profile
+			isAutoswitchCurrent := currentAutoswitchProfile == p.name
+
+			// For non-active autoswitch current profile, show marker in mode field
+			// For active autoswitch current, show marker after mode field
+			autoswitchMarker := ""
+			if isAutoswitchCurrent {
+				if p.active {
+					autoswitchMarker = colorYellow + " [autoswitch-active]" + colorReset
+				} else {
+					modeStr = " [autoswitch-active]"
+				}
 			}
 
 			// Pad status to fixed width BEFORE coloring
@@ -279,21 +329,52 @@ func listCmd() {
 			}
 			coloredStatus := statusColor + paddedStatus + colorReset
 
-			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %d\n",
+			// Color and pad mode string for alignment
+			paddedMode := fmt.Sprintf("%-22s", modeStr)
+			coloredPaddedMode := paddedMode
+			if p.active && p.mode == "socks" {
+				coloredPaddedMode = colorCyan + paddedMode + colorReset
+			}
+			if isAutoswitchCurrent && !p.active {
+				coloredPaddedMode = colorYellow + paddedMode + colorReset
+			}
+
+			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s\n",
 				activeMarker,
 				maxNameLen, p.name,
 				maxPeerLen, p.peer,
 				p.hashes,
 				coloredStatus,
-				p.priority)
+				p.priority,
+				coloredPaddedMode,
+				autoswitchMarker)
 		}
 	}
 
 	printProfiles(regularProfiles, "Профили")
 	printProfiles(readOnlyProfiles, "Read-only профили")
 
-	if getActiveProfile() == "autoswitch" {
+	// Show autoswitch status with mode info
+	if d, ok := runningDetails["autoswitch"]; ok {
+		modeStr := d.Mode
+		portStr := ""
+		if d.Mode == "socks" {
+			portStr = fmt.Sprintf(":%d", d.SocksPort)
+		}
+		if currentAutoswitchProfile != "" {
+			fmt.Printf("\n[*] Режим авто-переключения активен (%s%s, PID: qwdtt-autoswitch)\n", modeStr, portStr)
+			fmt.Printf("[*] Текущий профиль autoswitch: %s%s%s\n", colorYellow, currentAutoswitchProfile, colorReset)
+		} else {
+			fmt.Printf("\n[*] Режим авто-переключения активен (%s%s, PID: qwdtt-autoswitch)\n", modeStr, portStr)
+			fmt.Println("[*] Текущий профиль autoswitch: (нет активного подключения)")
+		}
+	} else if getActiveProfile() == "autoswitch" {
 		fmt.Println("\n[*] Режим авто-переключения активен (PID: qwdtt-autoswitch)")
+		if currentAutoswitchProfile != "" {
+			fmt.Printf("[*] Текущий профиль autoswitch: %s%s%s\n", colorYellow, currentAutoswitchProfile, colorReset)
+		} else {
+			fmt.Println("[*] Текущий профиль autoswitch: (нет активного подключения)")
+		}
 	}
 }
 
@@ -332,6 +413,17 @@ func showCmd() {
 	}
 	fmt.Printf("  Status: %s\n", status)
 	fmt.Printf("  Priority: %d\n", prof.Priority)
+
+	// Show runtime mode (tun/socks) if the profile is currently running
+	details := getRunningProfileDetails()
+	if d, ok := details[name]; ok {
+		fmt.Printf("  Режим: %s\n", d.Mode)
+		if d.Mode == "socks" {
+			fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+		}
+		fmt.Printf("  PID: %d\n", d.PID)
+	}
+
 	fmt.Printf("  Хеши (%d):\n", len(prof.Hashes))
 	for i, h := range prof.Hashes {
 		fmt.Printf("    %d. %s\n", i+1, h)
@@ -657,40 +749,99 @@ func disconnectCmd() {
 		targetProfile = os.Args[2]
 	}
 
+	// Collect all running profiles
+	runningDetails := getRunningProfileDetails()
+	running := make([]string, 0, len(runningDetails))
+	for name := range runningDetails {
+		if name == "autoswitch" {
+			continue
+		}
+		running = append(running, name)
+	}
+	// Also check for autoswitch daemon
+	if isDaemonRunning("autoswitch") {
+		running = append(running, "autoswitch")
+	}
+
+	// If no explicit target, try active profile first
 	if targetProfile == "" {
 		targetProfile = getActiveProfile()
 	}
 
-	// If still no target, look at running profiles
-	if targetProfile == "" {
-		running := getRunningProfiles()
-		names := make([]string, 0, len(running))
-		for name := range running {
-			names = append(names, name)
-		}
-
-		if len(names) == 0 {
+	// If still no target, or if there are multiple running profiles,
+	// show interactive selection
+	if targetProfile == "" || len(running) > 1 {
+		if len(running) == 0 {
 			fmt.Println("[!] Нет активного подключения и профиль не указан")
 			os.Exit(1)
 		}
 
-		if len(names) == 1 {
-			// Only one running — disconnect it
-			targetProfile = names[0]
+		// Sort: tun profiles first, then socks, then autoswitch
+		sort.Slice(running, func(i, j int) bool {
+			di, oki := runningDetails[running[i]]
+			dj, okj := runningDetails[running[j]]
+			mi := "tun"
+			if oki {
+				mi = di.Mode
+			}
+			mj := "tun"
+			if okj {
+				mj = dj.Mode
+			}
+			if mi == "tun" && mj == "socks" {
+				return true
+			}
+			if mi == "socks" && mj == "tun" {
+				return false
+			}
+			return running[i] < running[j]
+		})
+
+		if len(running) == 1 && targetProfile == running[0] {
+			// Only one running profile and it matches active profile — use it
+		} else if len(running) == 1 {
+			targetProfile = running[0]
 		} else {
 			// Multiple running — interactive selection
-			sort.Strings(names)
 			fmt.Println("Активные подключения:")
-			for i, name := range names {
-				fmt.Printf("  %d. %s\n", i+1, name)
+			for i, name := range running {
+				var detailStr string
+				if d, ok := runningDetails[name]; ok {
+					if d.Mode == "socks" {
+						detailStr = fmt.Sprintf(" [socks:%d]", d.SocksPort)
+					} else {
+						detailStr = " [tun]"
+					}
+				} else if name == "autoswitch" {
+					detailStr = " [autoswitch]"
+				}
+				fmt.Printf("  %d. %s%s\n", i+1, name, detailStr)
 			}
 			fmt.Print("> ")
 			var choice int
-			if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(names) {
+			if _, err := fmt.Scanf("%d", &choice); err != nil || choice < 1 || choice > len(running) {
 				fmt.Println("[!] Неверный выбор")
 				os.Exit(1)
 			}
-			targetProfile = names[choice-1]
+			targetProfile = running[choice-1]
+		}
+	}
+
+	// If autoswitch daemon is running, switch to the next profile instead of killing
+	if isDaemonRunning("autoswitch") && targetProfile != "" && targetProfile != "autoswitch" {
+		autoswitchPID, err := readPidForProfile("autoswitch")
+		if err == nil && autoswitchPID > 0 {
+			currentProfile := getAutoswitchCurrentProfile()
+			if currentProfile == targetProfile {
+				fmt.Printf("[*] Отключение текущего профиля '%s' от autoswitch (переключение на следующий)...\n", targetProfile)
+			} else {
+				fmt.Printf("[*] Сигнал переключения отправлен в autoswitch daemon (PID: %d)...\n", autoswitchPID)
+			}
+			syscall.Kill(autoswitchPID, syscall.SIGUSR1)
+			clearAutoswitchCurrentProfile()
+			notifyDisconnectedSync(targetProfile)
+			fmt.Println("[OK] Отключено")
+			return
 		}
 	}
 
@@ -706,6 +857,9 @@ func disconnectCmd() {
 		fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
 		killByPgrep(targetProfile)
 	}
+
+	// Notify that the profile was disconnected
+	notifyDisconnectedSync(targetProfile)
 
 	// If disconnecting the active profile, clear it
 	if wasActive {
@@ -822,25 +976,105 @@ func debugCmd() {
 	}
 
 	fmt.Printf("=== DEBUG INFO ===\n\n")
-	fmt.Printf("Активный профиль: %s\n\n", activeProfile)
 
+	// Show autoswitch status if active
 	if activeProfile == "autoswitch" {
 		fmt.Println("[*] Режим авто-переключения активен")
-		fmt.Println("  Используйте qwdtt discon для остановки")
-	} else {
-		prof, err := loadProfile(activeProfile)
-		if err != nil {
-			fmt.Printf("[ERROR] Не удалось загрузить профиль: %v\n", err)
-		} else {
-			fmt.Printf("Конфигурация профиля:\n")
+	}
+
+	// Show all running profiles with details
+	details := getRunningProfileDetails()
+	if len(details) > 0 {
+		// Sort: tun first, then socks, then autoswitch
+		type profileEntry struct {
+			name string
+			d    *ProfileDetails
+		}
+		var sorted []profileEntry
+		for name, d := range details {
+			sorted = append(sorted, profileEntry{name, d})
+		}
+		sort.Slice(sorted, func(i, j int) bool {
+			mi, mj := sorted[i].d.Mode, sorted[j].d.Mode
+			if mi == "tun" && mj != "tun" {
+				return true
+			}
+			if mj == "tun" && mi != "tun" {
+				return false
+			}
+			return sorted[i].name < sorted[j].name
+		})
+
+		fmt.Printf("Активные профили (%d):\n", len(sorted))
+		for _, e := range sorted {
+			modeStr := e.d.Mode
+			portStr := ""
+			if e.d.Mode == "socks" {
+				portStr = fmt.Sprintf(":%d", e.d.SocksPort)
+			}
+			fmt.Printf("  %s (%s%s, PID: %d)\n", e.name, modeStr, portStr, e.d.PID)
+		}
+		fmt.Println()
+
+		// Show detailed config for each running profile
+		for idx, e := range sorted {
+			if idx > 0 {
+				fmt.Println("  ---")
+			}
+			if e.name == "autoswitch" {
+				// autoswitch is not a real profile — just show mode info
+				fmt.Printf("Режим авто-переключения (autoswitch):\n")
+				fmt.Printf("  Mode: %s\n", e.d.Mode)
+				if e.d.Mode == "socks" {
+					fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
+				}
+				fmt.Printf("  PID: %d\n", e.d.PID)
+
+				// Show current autoswitch profile
+				currentProfile := getAutoswitchCurrentProfile()
+				if currentProfile != "" {
+					fmt.Printf("  Текущий профиль: %s\n", currentProfile)
+				} else {
+					fmt.Printf("  Текущий профиль: (нет активного подключения)\n")
+				}
+
+				// Per-profile resource usage
+				if usage, err := getProcessUsageByPID(e.d.PID); err == nil {
+					fmt.Printf("  Активных воркеров: %d\n", usage.Workers)
+				} else {
+					fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
+				}
+				fmt.Println()
+				continue
+			}
+			prof, err := loadProfile(e.name)
+			if err != nil {
+				fmt.Printf("[ERROR] Не удалось загрузить профиль '%s': %v\n", e.name, err)
+				continue
+			}
+			fmt.Printf("Конфигурация профиля '%s':\n", e.name)
 			fmt.Printf("  Peer: %s\n", prof.PeerAddr)
-			fmt.Printf("  Listen: %s\n", prof.Listen)
 			if prof.TurnHost != "" {
 				fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
 			}
 			fmt.Printf("  Device ID: %s\n", prof.DeviceID)
-			fmt.Printf("  Priority: %d\n\n", prof.Priority)
+			fmt.Printf("  Priority: %d\n", prof.Priority)
+			fmt.Printf("  Mode: %s\n", e.d.Mode)
+			if e.d.Mode == "socks" {
+				fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
+			}
+			fmt.Printf("  PID: %d\n", e.d.PID)
+
+			// Per-profile resource usage
+			if usage, err := getProcessUsageByPID(e.d.PID); err == nil {
+				fmt.Printf("  Активных воркеров: %d\n", usage.Workers)
+			} else {
+				fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
+			}
+			fmt.Println()
 		}
+	} else {
+		fmt.Println("[!] Нет запущенных профилей (PID-файлы не найдены)")
 	}
 
 	if stats, err := getWGStats(); err == nil {
@@ -855,14 +1089,13 @@ func debugCmd() {
 		fmt.Printf("Input/Output: [ERROR] %v\n\n", err)
 	}
 
-	fmt.Printf("Использование ресурсов (qwdtt):\n")
+	// Show aggregate resource usage
 	if usage, err := getProcessUsage(); err == nil {
+		fmt.Printf("Использование ресурсов (qwdtt):\n")
 		fmt.Printf("  CPU: %.1f%%\n", usage.CPU)
 		fmt.Printf("  RAM: %s\n", formatBytes(usage.Memory))
-		fmt.Printf("  Threads: %d\n", usage.Threads)
-		fmt.Printf("  Активных воркеров: %d\n", usage.Workers)
 	} else {
-		fmt.Printf("  [ERROR] %v\n", err)
+		fmt.Printf("Использование ресурсов (qwdtt):\n  [ERROR] %v\n", err)
 	}
 }
 
@@ -915,8 +1148,7 @@ func shareCmd() {
 
 	// Output
 	fmt.Printf("Профиль: %s\n", name)
-	fmt.Printf("Ссылка:")
-	fmt.Printf(link)
+	fmt.Printf("Ссылка: %s\n\n", link)
 	fmt.Println("QR-код:")
 	qrterminal.Generate(link, qrterminal.L, os.Stdout)
 	fmt.Println()

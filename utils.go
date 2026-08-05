@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// defaultSocksPort is the default SOCKS5 port used when -socks-port is not specified.
+const defaultSocksPort = 9050
+
 func formatBytes(b int64) string {
 	const unit = 1024
 	if b < unit {
@@ -130,6 +133,56 @@ type ProcessUsage struct {
 	Workers  int
 }
 
+// getProcessUsageByPID returns resource usage for a specific PID.
+func getProcessUsageByPID(pid int) (*ProcessUsage, error) {
+	pidStr := strconv.Itoa(pid)
+	cmd := exec.Command("ps", "-p", pidStr, "-o", "%cpu,rss", "--no-headers")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("process not found: %w", err)
+	}
+
+	fields := strings.Fields(string(output))
+	if len(fields) < 2 {
+		return nil, fmt.Errorf("cannot parse ps output for pid %d", pid)
+	}
+
+	cpuStr := strings.Replace(fields[0], ",", ".", -1)
+	cpu, err := strconv.ParseFloat(cpuStr, 64)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse CPU for pid %d: %w", pid, err)
+	}
+
+	rss, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse memory for pid %d: %w", pid, err)
+	}
+
+	usage := &ProcessUsage{
+		CPU:    cpu,
+		Memory: rss * 1024,
+	}
+
+	// Read thread count from /proc/<pid>/status
+	statusData, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err == nil {
+		for _, line := range strings.Split(string(statusData), "\n") {
+			if strings.HasPrefix(line, "Threads:") {
+				threadCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Threads:")))
+				if err == nil {
+					usage.Threads = threadCount
+					if threadCount > 3 {
+						usage.Workers = threadCount - 3
+					}
+				}
+				break
+			}
+		}
+	}
+
+	return usage, nil
+}
+
 func getProcessUsage() (*ProcessUsage, error) {
 	var pids []string
 
@@ -158,7 +211,7 @@ func getProcessUsage() (*ProcessUsage, error) {
 		return nil, fmt.Errorf("process not found")
 	}
 
- 	selfPID := os.Getpid()
+	selfPID := os.Getpid()
 	var totalCPU float64
 	var totalMem int64
 	var totalThreads int
@@ -174,49 +227,21 @@ func getProcessUsage() (*ProcessUsage, error) {
 			continue
 		}
 
-		cmd := exec.Command("ps", "-p", pid, "-o", "%cpu,rss", "--no-headers")
-		output, err := cmd.Output()
+		usage, err := getProcessUsageByPID(pidInt)
 		if err != nil {
 			continue
 		}
 
-		fields := strings.Fields(string(output))
-		if len(fields) < 2 {
-			continue
-		}
-
-		cpuStr := strings.Replace(fields[0], ",", ".", -1)
-		cpu, err := strconv.ParseFloat(cpuStr, 64)
-		if err == nil {
-			totalCPU += cpu
-		}
-
-		rss, err := strconv.ParseInt(fields[1], 10, 64)
-		if err == nil {
-			totalMem += rss * 1024
-			foundProcess = true
-		}
-
-		// Read thread count from /proc/<pid>/status
-		statusData, err := os.ReadFile(fmt.Sprintf("/proc/%s/status", pid))
-		if err == nil {
-			for _, line := range strings.Split(string(statusData), "\n") {
-				if strings.HasPrefix(line, "Threads:") {
-					threadCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Threads:")))
-					if err == nil {
-						totalThreads += threadCount
-					}
-					break
-				}
-			}
-		}
+		totalCPU += usage.CPU
+		totalMem += usage.Memory
+		totalThreads += usage.Threads
+		foundProcess = true
 	}
 
 	if !foundProcess {
 		return nil, fmt.Errorf("no active connection process found")
 	}
 
-	// Workers ≈ threads - main thread - stdin reader goroutine - suspend monitor goroutine
 	workers := 0
 	if totalThreads > 3 {
 		workers = totalThreads - 3
@@ -229,3 +254,84 @@ func getProcessUsage() (*ProcessUsage, error) {
 		Workers:  workers,
 	}, nil
 }
+
+// ProfileDetails holds information about a running qwdtt profile process.
+type ProfileDetails struct {
+	Mode     string // "tun" or "socks"
+	SocksPort int    // SOCKS5 port (only relevant for socks mode)
+	PID      int    // Process PID
+}
+
+// getRunningProfileDetails returns details (mode, socks port, PID) for each running profile.
+func getRunningProfileDetails() map[string]*ProfileDetails {
+	details := make(map[string]*ProfileDetails)
+
+	// Use PID files first for reliable discovery
+	entries, err := os.ReadDir(pidFilesDir())
+	if err != nil {
+		return details
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".pid") || !strings.HasPrefix(name, "qwdtt-") {
+			continue
+		}
+		profile := strings.TrimSuffix(strings.TrimPrefix(name, "qwdtt-"), ".pid")
+		if profile == "" {
+			continue
+		}
+
+		pidStr := readPidFile(pidFilePath(profile))
+		pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
+		if err != nil || !isProcessAlive(pid) {
+			continue
+		}
+
+		// Parse cmdline for mode and socks-port
+		cmdlinePath := fmt.Sprintf("/proc/%d/cmdline", pid)
+		cmdlineData, err := os.ReadFile(cmdlinePath)
+		if err != nil {
+			continue
+		}
+		cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
+
+		d := &ProfileDetails{PID: pid, Mode: "tun"}
+		// Check for mode
+		if strings.Contains(cmdline, "-mode socks") || strings.Contains(cmdline, "--mode=socks") ||
+			strings.Contains(cmdline, "-mode=socks") {
+			d.Mode = "socks"
+			// Default SOCKS port is 9050
+			d.SocksPort = defaultSocksPort
+			// Extract socks port if explicitly specified
+			fields := strings.Fields(cmdline)
+			for i, field := range fields {
+				if (field == "-socks-port" || field == "--socks-port") && i+1 < len(fields) {
+					port, err := strconv.Atoi(fields[i+1])
+					if err == nil {
+						d.SocksPort = port
+					}
+					break
+				}
+				if strings.HasPrefix(field, "-socks-port=") {
+					port, err := strconv.Atoi(strings.TrimPrefix(field, "-socks-port="))
+					if err == nil {
+						d.SocksPort = port
+					}
+					break
+				}
+				if strings.HasPrefix(field, "--socks-port=") {
+					port, err := strconv.Atoi(strings.TrimPrefix(field, "--socks-port="))
+					if err == nil {
+						d.SocksPort = port
+					}
+					break
+				}
+			}
+		}
+		details[profile] = d
+	}
+
+	return details
+}
+

@@ -56,8 +56,8 @@ Connect Flags:
   -auto-switch                Auto-switch to other profiles on failure
                                (uses enabled profiles only)
   -timeout N                  Timeout for -auto-switch in seconds (default: 120)
-  -mode MODE                  Connection mode (default: kernel)
-                               Options: kernel - direct kernel WireGuard
+  -mode MODE                  Connection mode (default: tun)
+                               Options: tun - direct tun WireGuard
                                         socks - local SOCKS5 proxy
   -socks-port PORT            SOCKS5 port (default: 9050)
                                  Required with -mode socks

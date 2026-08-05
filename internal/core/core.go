@@ -41,6 +41,9 @@ const (
 	EventStats EventType = "stats"
 )
 
+// DefaultSocksPort is the default SOCKS5 port.
+const DefaultSocksPort = 9050
+
 // Event — событие от ядра к orchestrator.
 type Event struct {
 	Type EventType
@@ -116,10 +119,10 @@ func New(cfg Config) *Core {
 		cfg.Workers = 9
 	}
 	if cfg.Mode == "" {
-		cfg.Mode = "kernel"
+		cfg.Mode = "tun"
 	}
 	if cfg.SocksPort <= 0 {
-		cfg.SocksPort = 9050
+		cfg.SocksPort = DefaultSocksPort
 	}
 	c := &Core{
 		cfg:               cfg,

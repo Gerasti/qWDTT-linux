@@ -56,7 +56,7 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l dns -d "DNS resolver"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l captcha -d "Captcha bypass mode" -a "auto rjs"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l timeout -d "Connection timeout (seconds)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "kernel socks"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "tun socks"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-port -d "SOCKS5 port (only with -mode socks)"
 
 # show, remove - all profile names

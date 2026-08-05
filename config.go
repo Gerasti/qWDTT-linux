@@ -66,3 +66,23 @@ func getActiveProfile() string {
 func clearActiveProfile() {
 	_ = os.Remove(activeProfilePath())
 }
+
+func autoswitchProfilePath() string {
+	return filepath.Join(pidFilesDir(), "autoswitch_current_profile")
+}
+
+func setAutoswitchCurrentProfile(name string) error {
+	return os.WriteFile(autoswitchProfilePath(), []byte(name), 0o644)
+}
+
+func getAutoswitchCurrentProfile() string {
+	data, err := os.ReadFile(autoswitchProfilePath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func clearAutoswitchCurrentProfile() {
+	_ = os.Remove(autoswitchProfilePath())
+}
