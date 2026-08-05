@@ -1,4 +1,4 @@
-# qWDTT CLI v0.8.0
+# qWDTT CLI v0.9.0
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
 
@@ -7,10 +7,13 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - Kernel WireGuard без sudo (capabilities)
 - Управление профилями с приоритетами
 - Auto-switch - переключение между профилями при сбоях
+- SOCKS5 режим (без root, через wireproxy)
 - Автоматическое переподключение после suspend/resume
 - Read-only профили через NixOS конфигурацию (с поддержкой sops-nix)
 - DNS resolvers: Yandex, Cloudflare, Google (UDP и DoH)
-- Оптимизация CPU клиентского ядра
+- D-Bus уведомления о подключениях и событиях
+- Live вывод лога демона (`-log` флаг и `qwdtt log` команда)
+- share <name> — показ ссылки и QR-кода для профиля
 - Debug режим для мониторинга соединения
 
 ## Установка
@@ -153,6 +156,18 @@ qwdtt con myserver -dns doh:https://dns.example.com/dns-query
 qwdtt debug
 # или watch -n 1 qwdtt debug
 
+# Просмотр лога демона (последние 20 строк)
+qwdtt log autoswitch -n 20
+
+# Просмотр лога в реальном времени
+qwdtt log autoswitch -f
+
+# Live лог при подключении
+qwdtt con -auto-switch -log
+
+# Отключить текущий профиль autoswitch (переключится на следующий)
+qwdtt discon <current-profile-name>
+
 # Отключиться
 qwdtt disconnect
 
@@ -160,24 +175,27 @@ qwdtt disconnect
 qwdtt ls                    # список
 qwdtt edit myserver -priority 100
 qwdtt disable myserver
+qwdtt share myserver        # QR-код и share-ссылка
 ```
 
 ## Команды
 
 ```
-qwdtt connect <profile> [флаги]  - Подключиться к VPN
-qwdtt disconnect                 - Отключиться от VPN
-qwdtt debug                      - Показать debug информацию о соединении
-qwdtt add <name> <wdtt://...>    - Добавить профиль
-qwdtt edit <name> [флаги]        - Редактировать профиль
-qwdtt remove <name>              - Удалить профиль
-qwdtt list                       - Список профилей
-qwdtt show <name>                - Показать профиль
-qwdtt enable <name>              - Включить профиль
-qwdtt disable <name>             - Отключить профиль
-qwdtt device-id [id]             - Показать/установить Device ID
-qwdtt regenerate-id              - Перегенерировать Device ID
-qwdtt version                    - Версия
+qwdtt connect <profile> [флаги]      - Подключиться к VPN (alias: con)
+qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon)
+qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg)
+qwdtt share <name>                   - Показать share-ссылку и QR-код
+qwdtt debug                          - Показать debug информацию о соединении
+qwdtt add <name> <wdtt://...>        - Добавить профиль
+qwdtt edit <name> [флаги]            - Редактировать профиль
+qwdtt remove <name>                  - Удалить профиль (alias: rm)
+qwdtt list                           - Список профилей (alias: ls)
+qwdtt show <name>                    - Показать профиль (alias: sh)
+qwdtt enable <name>                  - Включить профиль (alias: en)
+qwdtt disable <name>                 - Отключить профиль (alias: dis)
+qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
+qwdtt regenerate-id                  - Перегенерировать Device ID
+qwdtt version                        - Версия
 ```
 
 ### Короткие алиасы
@@ -185,6 +203,7 @@ qwdtt version                    - Версия
 ```
 con    - connect
 discon - disconnect
+lg     - log
 sh     - show
 ls     - list
 rm     - remove
@@ -207,6 +226,10 @@ dis    - disable
   - Кастомный DoH: `doh:https://dns.example.com/dns-query`
 - `-captcha MODE` - режим обхода captcha (default: auto)
   - Опции: `auto`, `rjs`, `wv`
+- `-mode MODE` - режим подключения (default: tun)
+  - Опции: `tun` — прямой WireGuard через kernel; `socks` — локальный SOCKS5 прокси
+- `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
+- `-log` - выводить лог демона в терминал в реальном времени
 
 ## Флаги edit
 
@@ -216,6 +239,21 @@ dis    - disable
 - `-device-id ID` - изменить Device ID
 - `-listen ADDR` - изменить локальный UDP адрес (default: 127.0.0.1:9000)
 - `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
+
+## Auto-switch и режимы подключения
+
+**Auto-switch (autoswitch):**
+- Только один autoswitch daemon может быть запущен одновременно
+- Autoswitch работает в режиме `tun` (по умолчанию) или `socks` (`--mode socks`)
+- При подключении можно переключать профили: `qwdtt discon <current-profile>`
+- В режиме autoswitch все профили используют один и тот же режим (tun или socks)
+
+**Режим tun:**
+- Только одно активное tun-соединение (через WireGuard kernel interface `wg-qwdtt`)
+
+**Режим socks:**
+- SOCKS5 прокси через gVisor (без root)
+- Несколько SOCKS5 соединений возможны одновременно с разными портами (`-socks-port PORT`)
 
 ## Управление профилями
 
@@ -265,6 +303,7 @@ dis    - disable
 - `iproute2`, `wireguard-tools`
 - `cap_net_admin` capabilities
 - systemd (для suspend/resume)
+- D-Bus session bus (для уведомлений)
 
 ## Структура проекта
 
@@ -273,9 +312,12 @@ dis    - disable
 ├── cli.go                # Точка входа
 ├── connect.go            # Логика подключения
 ├── commands.go           # Команды управления профилями
-├── profile.go            # Работа с профилями
+├── daemon.go             # Демонизация и PID-файлы
 ├── config.go             # Конфигурация и Device ID
 ├── utils.go              # Вспомогательные функции
+├── notify.go             # D-Bus уведомления
+├── captcha_socket.go     # Сокет для капчи
+├── profile.go            # Работа с профилями
 ├── suspend.go            # Мониторинг suspend/resume
 ├── url_parser.go         # Парсинг wdtt:// URL
 ├── wireguard_linux.go    # WireGuard интеграция
