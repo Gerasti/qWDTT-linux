@@ -872,6 +872,52 @@ func disconnectCmd() {
 	fmt.Println("[OK] Отключено")
 }
 
+func logCmd() {
+	fs := flag.NewFlagSet("log", flag.ExitOnError)
+	numLines := fs.Int("n", 0, "Number of lines to show (0 = all)")
+	follow := fs.Bool("follow", false, "Follow log output in real-time")
+	fs.BoolVar(follow, "f", false, "Follow log output (alias for -follow)")
+
+	var name string
+	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
+		name = os.Args[2]
+		fs.Parse(os.Args[3:])
+	} else {
+		fs.Parse(os.Args[2:])
+		name = getActiveProfile()
+		if name == "" {
+			name = "autoswitch"
+		}
+	}
+
+	logFile := logFilePath(name)
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось прочитать лог '%s': %v\n", logFile, err)
+		os.Exit(1)
+	}
+
+	content := string(data)
+
+	if *numLines > 0 {
+		lines := strings.Split(content, "\n")
+		if len(lines) > *numLines {
+			lines = lines[len(lines)-*numLines:]
+		}
+		content = strings.Join(lines, "\n")
+	}
+
+	fmt.Print(content)
+
+	if *follow {
+		if !strings.HasSuffix(content, "\n") {
+			fmt.Println()
+		}
+		tailLogFile(logFile)
+	}
+}
+
 // killByPidFile sends SIGINT (then SIGTERM/SIGKILL) to the daemon process
 // identified by the pid file for the given profile. Returns false if no
 // valid pid file was found.

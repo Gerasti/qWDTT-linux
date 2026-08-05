@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -91,6 +93,7 @@ func connectCmd() {
 	captcha := fs.String("captcha", "auto", "Captcha bypass mode (auto|rjs)")
 	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
+	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -175,11 +178,11 @@ func connectCmd() {
 	if !isChild {
 		// Parent process: child is daemon. Set up stdin forwarding to socket.
 		sockPath := socketPath(dm.daemonProfileName())
+		logFile := logFilePath(dm.daemonProfileName())
 
-		if err := waitForSocket(sockPath, 3*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] Демон запущен, но сокет недоступен: %v\n", err)
-			fmt.Fprintf(os.Stderr, "[*] Подключение к профилю '%s' запущено в фоновом режиме\n", daemonProfile)
-			return
+		sockErr := waitForSocket(sockPath, 3*time.Second)
+		if sockErr != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Демон запущен, но сокет недоступен: %v\n", sockErr)
 		}
 
 		stopCh := make(chan struct{})
@@ -187,7 +190,16 @@ func connectCmd() {
 		go forwardStdinToSocket(sockPath, stopCh)
 
 		fmt.Printf("[*] Подключение к профилю '%s' запущено в фоновом режиме (PID file: %s)\n", daemonProfile, pidFilePath(dm.daemonProfileName()))
-		fmt.Println("[*] Для ввода CAPTCHA_RESULT| ответа капчи в терминал")
+
+		if *logFlag {
+			fmt.Println("[*] Вывод лога в реальном времени (Ctrl+C для выхода)")
+			go tailLogFile(logFile)
+			termCh := make(chan os.Signal, 1)
+			signal.Notify(termCh, syscall.SIGINT, syscall.SIGTERM)
+			<-termCh
+			fmt.Println("\n[*] Остановка...")
+		}
+
 		return
 	}
 
@@ -677,6 +689,33 @@ func tryConnectProfile(
 				clearActiveProfile()
 			}
 			return false, true
+		}
+	}
+}
+
+// tailLogFile follows a log file and prints new lines to stdout.
+func tailLogFile(path string) {
+	for {
+		file, err := os.Open(path)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		file.Seek(0, io.SeekEnd)
+		reader := bufio.NewReader(file)
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					time.Sleep(200 * time.Millisecond)
+					continue
+				}
+				file.Close()
+				break
+			}
+			fmt.Print(line)
 		}
 	}
 }

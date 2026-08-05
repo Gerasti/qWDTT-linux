@@ -28,7 +28,9 @@ Connection:
                               Disabled profiles can be used by explicitly specifying name
   disconnect [profile]        Disconnect from VPN (alias: discon)
                               If profile is not specified, disconnects active profile
-  debug                       Show debug information about current connection
+  log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active)
+                              -n N: show last N lines; -f: follow in real-time
+  debug                       Show debug information about current connection(s)
                               (e.g., watch -n 1 qwdtt debug)
 
 Device ID Management:
@@ -61,6 +63,7 @@ Connect Flags:
                                         socks - local SOCKS5 proxy
   -socks-port PORT            SOCKS5 port (default: 9050)
                                  Required with -mode socks
+  -log                        Show daemon log output in terminal in real-time
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)
@@ -76,15 +79,19 @@ Examples:
   qwdtt con myserver               # connect to profile
   qwdtt con myserver -captcha rjs  # connect with pure Go captcha solver
   qwdtt con myserver -auto-switch  # with auto-switching on failure
+  qwdtt con -auto-switch -log      # start autoswitch with live log output
   qwdtt debug                      # show current connection stats
   qwdtt discon                     # disconnect active profile
   qwdtt discon myserver            # disconnect specific profile
+  qwdtt discon wlrus-n2u2          # with autoswitch: switch to next profile
   qwdtt dis myserver               # disable profile (alias for disable)
   qwdtt con disabled-profile       # can connect by explicitly specifying name
   qwdtt en myserver                # enable profile (alias for enable)
   qwdtt edit myserver -password newpass
   qwdtt edit myserver -priority 100  # set high priority
   qwdtt ls
+  qwdtt log autoswitch -n 20       # show last 20 log lines
+  qwdtt log autoswitch -f          # follow log in real-time
   qwdtt sh myserver
 `, version)
 }
@@ -123,6 +130,8 @@ func main() {
 		deviceIDCmd()
 	case "regenerate-id":
 		regenerateIDCmd()
+	case "log", "lg":
+		logCmd()
 	case "version", "--version":
 		fmt.Printf("qwdtt v%s\n", version)
 	case "help", "-h", "--help":
