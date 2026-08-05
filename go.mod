@@ -13,6 +13,7 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/transport/v4 v4.0.1
 	github.com/pion/turn/v5 v5.0.5
+	github.com/sevlyar/go-daemon v0.1.7
 	github.com/windtf/wireproxy v1.1.2
 	golang.org/x/crypto v0.52.0
 	golang.org/x/net v0.54.0
@@ -29,6 +30,7 @@ require (
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
+	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/stun/v3 v3.1.2 // indirect

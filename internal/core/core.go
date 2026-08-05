@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -193,8 +194,11 @@ func (c *Core) Start() (<-chan Event, error) {
 		_ = uc.SetWriteBuffer(socketBufSize)
 	}
 
-	_, localPort, _ := net.SplitHostPort(c.cfg.Listen)
-	if localPort == "" {
+	localPort := ""
+	if addr, ok := localConn.LocalAddr().(*net.UDPAddr); ok {
+		localPort = strconv.Itoa(addr.Port)
+	}
+	if localPort == "" || localPort == "0" {
 		localPort = "9000"
 	}
 

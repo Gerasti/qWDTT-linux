@@ -1,19 +1,56 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"qwdtt/internal/core"
 )
+
+// isDaemonRunning checks if a daemon process for the given profile daemon
+// (e.g. "autoswitch" or a specific profile) is currently running via its PID file.
+func isDaemonRunning(profile string) bool {
+	pidStr, err := os.ReadFile(pidFilePath(profile))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidStr)))
+	if err != nil {
+		return false
+	}
+	return isProcessAlive(pid)
+}
+
+// isActiveProfile checks if the given profile is currently marked as the active profile.
+func isActiveProfile(profile string) bool {
+	return getActiveProfile() == profile
+}
+
+// isKernelInterfaceActive checks if the WireGuard kernel interface (wg-qwdtt) is up.
+func isKernelInterfaceActive() bool {
+	cmd := exec.Command("ip", "link", "show", wgIface)
+	return cmd.Run() == nil
+}
+
+// isSocksPortInUse checks if the given SOCKS port is already in use.
+func isSocksPortInUse(port int) bool {
+	conn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return true
+	}
+	conn.Close()
+	return false
+}
 
 func connectCmd() {
 	var profileName string
@@ -43,6 +80,137 @@ func connectCmd() {
 		fs.Parse(os.Args[3:])
 	}
 
+	daemonProfile := profileName
+	if daemonProfile == "" && *autoSwitch {
+		daemonProfile = "autoswitch"
+	}
+	if daemonProfile == "" {
+		log.Fatal("Профиль не указан и не удалось определить")
+	}
+
+	// --- Pre-connection conflict checks (parent process) ---
+	// These checks run before daemonization so we can use notify/fmt freely.
+	if *autoSwitch {
+		// Check if autoswitch daemon is already running
+		if isDaemonRunning("autoswitch") {
+			msg := "Авто-переключение уже запущено (PID file: qwdtt-autoswitch.pid). Используйте qwdtt discon для остановки."
+			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			notifyError("autoswitch", msg)
+			os.Exit(1)
+		}
+	} else {
+		// Single profile mode: check for conflicts
+		if isDaemonRunning(daemonProfile) {
+			msg := fmt.Sprintf("Профиль '%s' уже запущен (PID file: qwdtt-%s.pid). Используйте qwdtt discon %s для остановки.", daemonProfile, daemonProfile, daemonProfile)
+			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			notifyError(profileName, msg)
+			os.Exit(1)
+		}
+		if *mode == "kernel" {
+			// Kernel mode: only one connection allowed (wg-qwdtt interface)
+			if isActiveProfile("autoswitch") {
+				msg := "Уже запущено авто-переключение в режиме kernel. Используйте qwdtt discon для остановки."
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
+			if otherProfile := getActiveProfile(); otherProfile != "" && otherProfile != profileName {
+				msg := fmt.Sprintf("Уже активен профиль '%s' в режиме kernel. Используйте qwdtt discon для остановки.", otherProfile)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
+			if isKernelInterfaceActive() {
+				activeProfile := getActiveProfile()
+				target := activeProfile
+				if target == "" {
+					target = "другой процесс"
+				}
+				msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется (профиль: %s). Используйте qwdtt discon для остановки.", target)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
+		} else if *mode == "socks" {
+			// SOCKS mode: multiple connections allowed with different ports.
+			// Do not block on kernel interface (socks mode does not conflict with it),
+			// as each socks instance uses a unique DTLS port (Listen=127.0.0.1:0, different from kernel's 9000).
+			if isSocksPortInUse(*socksPort) {
+				msg := fmt.Sprintf("Порт SOCKS5 %d уже используется другим соединением. Укажите другой порт через -socks-port PORT.", *socksPort)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
+		}
+	}
+
+	dm := newDaemonManager(daemonProfile, *autoSwitch)
+	_, isChild, err := dm.Start()
+	if err != nil {
+		log.Fatalf("Ошибка демонизации: %v", err)
+	}
+
+	if !isChild {
+		// Parent process: child is daemon. Set up stdin forwarding to socket.
+		sockPath := socketPath(dm.daemonProfileName())
+
+		if err := waitForSocket(sockPath, 3*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Демон запущен, но сокет недоступен: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[*] Подключение к профилю '%s' запущено в фоновом режиме\n", daemonProfile)
+			return
+		}
+
+		stopCh := make(chan struct{})
+		defer close(stopCh)
+		go forwardStdinToSocket(sockPath, stopCh)
+
+		fmt.Printf("[*] Подключение к профилю '%s' запущено в фоновом режиме (PID file: %s)\n", daemonProfile, pidFilePath(dm.daemonProfileName()))
+		fmt.Println("[*] Для ввода CAPTCHA_RESULT| ответа капчи в терминал")
+		return
+	}
+
+	// Child (daemon) process — setup signal handling and proceed
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
+
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		for sig := range sigCh {
+			fmt.Printf("\n[*] Получен сигнал: %s\n", sig)
+			switch sig {
+			case syscall.SIGUSR1:
+				fmt.Println("[*] Перезагрузка конфигурации...")
+			case syscall.SIGUSR2:
+				fmt.Println("[*] Переключение уровня логирования...")
+			default:
+				close(stopCh)
+				close(done)
+				return
+			}
+		}
+	}()
+
+	_ = done
+	cs := newCaptchaSocket(dm.daemonProfileName())
+	if err := cs.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "[WARNING] Не удалось запустить socket для капчи: %v\n", err)
+	}
+	defer cs.Stop()
+	defer dm.Release()
+
+	// Set active profile for tracking/debug/disconnect
+	if *autoSwitch {
+		// In auto-switch mode, active_profile is always "autoswitch"
+		if err := setActiveProfile("autoswitch"); err != nil {
+			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+		}
+	} else {
+		if err := setActiveProfile(profileName); err != nil {
+			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+		}
+	}
+
 	var profiles []string
 	if *autoSwitch {
 		profiles = listProfileNames()
@@ -50,6 +218,7 @@ func connectCmd() {
 			log.Fatal("Нет доступных профилей")
 		}
 		if profileName != "" {
+			// Move specified profile to front if it exists
 			for i, p := range profiles {
 				if p == profileName {
 					profiles = append([]string{p}, append(profiles[:i], profiles[i+1:]...)...)
@@ -63,16 +232,6 @@ func connectCmd() {
 		}
 		profiles = []string{profileName}
 	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	stopCh := make(chan struct{})
-	go func() {
-		<-sigCh
-		fmt.Println("\nОтключение...")
-		close(stopCh)
-	}()
 
 	lastAttemptByDeviceID := make(map[string]time.Time)
 	const minRetryInterval = 5 * time.Second
@@ -117,7 +276,14 @@ func connectCmd() {
 					}
 				}
 
-				success, wasResume := tryConnectProfile(currentProfile, *workers, *mtu, *hashes, *dns, *captcha, *timeout, *autoSwitch, *mode, *socksPort, sigCh, stopCh)
+				success, wasResume := tryConnectProfile(
+					currentProfile,
+					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
+					*autoSwitch, *mode, *socksPort,
+					sigCh, stopCh, cs.SolveChan(),
+					false, // shouldSetActive: handled in connectCmd for non-autoswitch
+					!*autoSwitch, // skipActiveProfileClear: clear only in non-autoswitch mode
+				)
 				if success {
 					return
 				}
@@ -153,12 +319,27 @@ func connectCmd() {
 	}
 }
 
-func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dnsArg, captchaMode string, timeoutSec int, autoSwitch bool, mode string, socksPort int, sigCh chan os.Signal, stopCh chan struct{}) (bool, bool) {
+func tryConnectProfile(
+	profileName string,
+	workers, mtu int,
+	hashesOverride, dnsArg, captchaMode string,
+	timeoutSec int,
+	autoSwitch bool,
+	mode string,
+	socksPort int,
+	sigCh chan os.Signal,
+	stopCh chan struct{},
+	captchaCh <-chan string,
+	shouldSetActive bool,
+	skipActiveProfileClear bool,
+) (connected bool, wasResume bool) {
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		notifyError(profileName, "Ошибка загрузки профиля")
 		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
-		clearActiveProfile()
+		if !skipActiveProfileClear {
+			clearActiveProfile()
+		}
 		return false, false
 	}
 
@@ -191,7 +372,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	}
 
 	if mode == "socks" {
-		cfg.Listen = "127.0.0.1:9001"
+		// Use a random UDP port for DTLS to allow multiple concurrent socks instances.
+		// wireproxy handles WireGuard in userspace, so only the DTLS UDP socket needs to be unique.
+		cfg.Listen = "127.0.0.1:0"
 	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:9000"
 	}
@@ -203,8 +386,10 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 		fmt.Printf("  Mode: SOCKS5 on port %d\n", socksPort)
 	}
 
-	if err := setActiveProfile(profileName); err != nil {
-		fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+	if shouldSetActive {
+		if err := setActiveProfile(profileName); err != nil {
+			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+		}
 	}
 
 	c := core.New(cfg)
@@ -212,7 +397,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	if err != nil {
 		notifyError(profileName, "Ошибка запуска")
 		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
-		clearActiveProfile()
+		if !skipActiveProfileClear {
+			clearActiveProfile()
+		}
 		return false, false
 	}
 
@@ -221,24 +408,10 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 	defer close(suspendStopCh)
 	go monitorSuspendResume(suspendCh, suspendStopCh)
 
-	connected := false
+	connected = false
 	wgConfigured := false
 	wgTested := false
-	var coreInstance *core.Core
 	var wr *core.WireproxyRunner
-	coreInstance = c
-
-	// stdin reader for CAPTCHA_RESULT protocol
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if strings.HasPrefix(line, "CAPTCHA_RESULT|") {
-				result := strings.TrimPrefix(line, "CAPTCHA_RESULT|")
-				coreInstance.SolveCaptcha(result)
-			}
-		}
-	}()
 
 	var timeout *time.Timer
 	if autoSwitch {
@@ -248,24 +421,35 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 
 	for {
 		select {
+		case result := <-captchaCh:
+			fmt.Println("[*] Получен результат капчи через сокет")
+			c.SolveCaptcha(result)
 		case <-func() <-chan time.Time {
 			if timeout != nil {
 				return timeout.C
 			}
 			return make(<-chan time.Time)
-		}():
-			fmt.Println("[!] Таймаут подключения")
-			notifyError(profileName, "Таймаут подключения")
-			c.Stop()
-			if wgConfigured {
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
+	}():
+		fmt.Println("[!] Таймаут подключения")
+		notifyError(profileName, "Таймаут подключения")
+		c.Stop()
+		if wgConfigured {
+			teardownWG()
+		}
+		if wr != nil {
+			wr.Stop()
+		}
+		if !skipActiveProfileClear {
 			clearActiveProfile()
-			return false, false
-		case ev, ok := <-events:
+		}
+		return false, false
+	case <-stopCh:
+		if !skipActiveProfileClear {
+			notifyDisconnectedSync(profileName)
+			clearActiveProfile()
+		}
+		return false, false
+	case ev, ok := <-events:
 			if !ok {
 				if wgConfigured {
 					teardownWG()
@@ -273,8 +457,10 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 				if wr != nil {
 					wr.Stop()
 				}
-				notifyDisconnectedSync(profileName)
-				clearActiveProfile()
+				if !skipActiveProfileClear {
+					notifyDisconnectedSync(profileName)
+					clearActiveProfile()
+				}
 				return false, false
 			}
 
@@ -296,7 +482,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
-					clearActiveProfile()
+					if !skipActiveProfileClear {
+						clearActiveProfile()
+					}
 					return false, false
 				}
 			case core.EventLog:
@@ -316,7 +504,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
-					clearActiveProfile()
+					if !skipActiveProfileClear {
+						clearActiveProfile()
+					}
 					return false, false
 				}
 			case core.EventError:
@@ -332,18 +522,21 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
 							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
 							c.Stop()
-							clearActiveProfile()
+							if !skipActiveProfileClear {
+								clearActiveProfile()
+							}
 							return false, false
 						}
 						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
-						notifyConnected(profileName)
+						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
+						notifyConnected(profileName, int32(cfg.Workers))
 						wgTested = true
 
 						if timeout != nil {
 							timeout.Stop()
 						}
 					} else {
-						turnIPs := coreInstance.GetTurnIPs()
+						turnIPs := c.GetTurnIPs()
 						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
 						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
@@ -352,7 +545,9 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							fmt.Println("  1. Команды ip и wg доступны")
 							fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
 							c.Stop()
-							clearActiveProfile()
+							if !skipActiveProfileClear {
+								clearActiveProfile()
+							}
 							return false, false
 						}
 						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
@@ -364,12 +559,15 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
 							c.Stop()
 							teardownWG()
-							clearActiveProfile()
+							if !skipActiveProfileClear {
+								clearActiveProfile()
+							}
 							return false, false
 						}
 						fmt.Println("[OK] Туннель работает корректно")
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
-						notifyConnected(profileName)
+						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
+						notifyConnected(profileName, int32(cfg.Workers))
 						wgTested = true
 
 						if timeout != nil {
@@ -385,8 +583,10 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 					if wr != nil {
 						wr.Stop()
 					}
-					notifyDisconnectedSync(profileName)
-					clearActiveProfile()
+					if !skipActiveProfileClear {
+						notifyDisconnectedSync(profileName)
+						clearActiveProfile()
+					}
 					return false, false
 				} else if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
@@ -400,8 +600,8 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 						formatBytes(ev.RxBytes),
 						formatBytes(ev.TxBytes),
 						ev.Workers)
-				}
-			}
+					notifyWorkers(profileName, ev.Workers)
+				}			}
 		case <-suspendCh:
 			fmt.Println("\n[*] Обнаружен resume, переподключение...")
 			c.Stop()
@@ -411,239 +611,12 @@ func tryConnectProfile(profileName string, workers, mtu int, hashesOverride, dns
 			if wr != nil {
 				wr.Stop()
 			}
-			clearActiveProfile()
+			if !skipActiveProfileClear {
+				notifyDisconnectedSync(profileName)
+				clearActiveProfile()
+			}
 			return false, true
-					case ev, ok := <-events:
-						if !ok {
-							if wgConfigured {
-								teardownWG()
-							}
-							if wr != nil {
-								wr.Stop()
-							}
-							notifyDisconnectedSync(profileName)
-							return false, false
-						}
-
-			switch ev.Type {
-			case core.EventState:
-				switch ev.Status {
-				case "connecting":
-					fmt.Println("[*] Подключение...")
-				case "running":
-					if !connected {
-						connected = true
-						fmt.Println("[OK] Туннель активен")
-					}
-				case "disconnected":
-					fmt.Println("[*] Отключено")
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
-					clearActiveProfile()
-					return false, false
-				}
-			case core.EventLog:
-				if strings.Contains(ev.Message, "Конфиг получен") {
-					fmt.Printf("[OK] %s\n", ev.Message)
-				} else if strings.Contains(ev.Message, "[VK Auth] Success") {
-					notifyVKAuth(profileName)
-				} else if ev.Level == "ERROR" {
-					fmt.Printf("[ERROR] %s\n", ev.Message)
-				} else if strings.Contains(ev.Message, "FATAL") {
-					notifyError(profileName, ev.Message)
-					fmt.Printf("[!] %s\n", ev.Message)
-					c.Stop()
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
-					clearActiveProfile()
-					return false, false
-				}
-			case core.EventError:
-				fmt.Printf("[ERROR] %s\n", ev.Message)
-			case core.EventEvent:
-				if ev.Name == "wg_config" && !wgConfigured {
-					wgConfigured = true
-					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
-
-					if mode == "socks" {
-						// SOCKS5 mode: use wireproxy for userspace WireGuard + SOCKS5
-						wr = core.NewWireproxyRunner(socksPort)
-						if err := wr.Start(context.Background(), ev.Data); err != nil {
-							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
-							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
-							c.Stop()
-							clearActiveProfile()
-							return false, false
-						}
-						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
-						notifyConnected(profileName)
-						wgTested = true // Mark as tested so we can exit the connection loop
-
-						if timeout != nil {
-							timeout.Stop()
-						}
-					} else {
-						// Kernel mode: configure WG interface as before
-						turnIPs := coreInstance.GetTurnIPs()
-						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
-						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
-							notifyError(profileName, "Ошибка настройки WireGuard")
-							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
-							fmt.Println("  Убедитесь, что:")
-							fmt.Println("  1. Команды ip и wg доступны")
-							fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
-							c.Stop()
-							clearActiveProfile()
-							return false, false
-						}
-						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
-
-						fmt.Println("[*] Проверка работоспособности туннеля...")
-						time.Sleep(2 * time.Second)
-						if err := testWGConnectivity(); err != nil {
-							notifyError(profileName, "Туннель не работает")
-							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
-							c.Stop()
-							teardownWG()
-							clearActiveProfile()
-							return false, false
-						}
-						fmt.Println("[OK] Туннель работает корректно")
-						fmt.Println("[*] Весь трафик теперь идет через VPN")
-						notifyConnected(profileName)
-						wgTested = true
-
-						if timeout != nil {
-							timeout.Stop()
-						}
-					}
-
-				} else if ev.Name == "captcha_required" {
-					parts := strings.Split(ev.Data, "|")
-					if len(parts) >= 1 {
-						fmt.Printf("[!] Captcha required (mode: %s)\n", parts[0])
-					}
-				}
-			case core.EventStats:
-				if connected && wgTested && ev.RxBytes > 0 {
-					fmt.Printf("\r[STATS] RX: %s | TX: %s | Workers: %d   ",
-						formatBytes(ev.RxBytes),
-						formatBytes(ev.TxBytes),
-						ev.Workers)
-				}
-			}
-		}
-
-		if wgTested && connected {
-			var healthCheckTicker *time.Ticker
-			if autoSwitch {
-				healthCheckTicker = time.NewTicker(30 * time.Second)
-				defer healthCheckTicker.Stop()
-			}
-
-			for {
-				select {
-				case <-sigCh:
-					c.Stop()
-					if wgConfigured {
-						fmt.Println("\n[*] Удаление WireGuard интерфейса...")
-						if err := teardownWG(); err != nil {
-							fmt.Printf("[!] Ошибка при удалении интерфейса: %v\n", err)
-						}
-					}
-					if wr != nil {
-						wr.Stop()
-					}
-					notifyDisconnectedSync(profileName)
-					fmt.Println("[*] Завершено")
-					clearActiveProfile()
-					return true, false
-				case <-stopCh:
-					c.Stop()
-					if wgConfigured {
-						fmt.Println("\n[*] Удаление WireGuard интерфейса...")
-						if err := teardownWG(); err != nil {
-							fmt.Printf("[!] Ошибка при удалении интерфейса: %v\n", err)
-						}
-					}
-					if wr != nil {
-						wr.Stop()
-					}
-					notifyDisconnectedSync(profileName)
-					clearActiveProfile()
-					return false, false
-				case <-suspendCh:
-					fmt.Println("\n[*] Обнаружен resume, переподключение...")
-					c.Stop()
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
-					notifyDisconnectedSync(profileName)
-					return false, true
-				case <-func() <-chan time.Time {
-					if healthCheckTicker != nil {
-						return healthCheckTicker.C
-					}
-					return make(<-chan time.Time)
-				}():
-					if mode == "kernel" {
-						if err := testWGConnectivity(); err != nil {
-							notifyError(profileName, "Туннель перестал работать")
-							fmt.Printf("\n[ERROR] Туннель перестал работать: %v\n", err)
-							c.Stop()
-							if wgConfigured {
-								teardownWG()
-							}
-							return false, false
-						}
-					}
-				case ev, ok := <-events:
-					if !ok {
-						if wgConfigured {
-							teardownWG()
-						}
-						if wr != nil {
-							wr.Stop()
-						}
-						return false, false
-					}
-
-					switch ev.Type {
-					case core.EventState:
-						if ev.Status == "disconnected" {
-							fmt.Println("[*] Отключено")
-							if wgConfigured {
-								teardownWG()
-							}
-							if wr != nil {
-								wr.Stop()
-							}
-							notifyDisconnectedSync(profileName)
-							return false, false
-						}
-					case core.EventError:
-						fmt.Printf("[ERROR] %s\n", ev.Message)
-					case core.EventStats:
-						if ev.RxBytes > 0 {
-							fmt.Printf("\r[STATS] RX: %s | TX: %s | Workers: %d   ",
-								formatBytes(ev.RxBytes),
-								formatBytes(ev.TxBytes),
-								ev.Workers)
-						}
-					}
-				}
-			}
 		}
 	}
 }
+

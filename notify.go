@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -39,8 +40,8 @@ func notifyDBus(summary, body string) {
 	}
 }
 
-func notifyConnected(profileName string) {
-	go notifyDBus(appName+": Подключено", fmt.Sprintf("Подключение активно: %s", profileName))
+func notifyConnected(profileName string, workers int32) {
+	go notifyDBus(appName+": Подключено", fmt.Sprintf("Подключение активно: %s\nАктивных воркеров: %d", profileName, workers))
 }
 
 func notifyDisconnected(profileName string) {
@@ -57,4 +58,22 @@ func notifyError(profileName, errMsg string) {
 
 func notifyVKAuth(profileName string) {
 	go notifyDBus(appName+": Аутентификация пройдена", fmt.Sprintf("VK auth успешна: %s", profileName))
+}
+
+var lastWorkerNotif time.Time
+var workerNotifMu sync.Mutex
+
+func notifyWorkers(profileName string, workers int32) {
+	workerNotifMu.Lock()
+	defer workerNotifMu.Unlock()
+	// Throttle: don't send worker notifications more than once per 60 seconds
+	if time.Since(lastWorkerNotif) < 60*time.Second {
+		return
+	}
+	lastWorkerNotif = time.Now()
+	sendNotification(fmt.Sprintf("qwdtt: %s", profileName), fmt.Sprintf("Активных воркеров: %d", workers))
+}
+
+func sendNotification(summary, body string) {
+	go notifyDBus(summary, body)
 }

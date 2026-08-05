@@ -49,16 +49,6 @@ in
       home = {
         link = config.sops.secrets.home-server.path;
       };
-      backup1 = {
-        link = config.sops.secrets.backup1.path;
-      };
-      backup2 = {
-        link = config.sops.secrets.backup2.path;
-      };
-      mobile = {
-        link = config.sops.secrets.mobile-server.path;
-        deviceId = config.sops.secrets.wdtt-id-mobile.path;
-      };
       guest = {
         link = config.sops.secrets.guest-server.path;
         deviceId = config.sops.secrets.wdtt-id-guest.path;

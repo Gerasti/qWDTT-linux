@@ -124,26 +124,44 @@ func getWGStats() (*WGStats, error) {
 }
 
 type ProcessUsage struct {
-	CPU    float64
-	Memory int64
+	CPU      float64
+	Memory   int64
+	Threads  int
+	Workers  int
 }
 
 func getProcessUsage() (*ProcessUsage, error) {
-	selfPID := os.Getpid()
+	var pids []string
 
-	cmd := exec.Command("pgrep", "-f", "qwdtt")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("process not found")
+	// Primary: find PID via pidfile from active profile
+	activeProfile := getActiveProfile()
+	if activeProfile != "" {
+		if data, err := os.ReadFile(pidFilePath(activeProfile)); err == nil {
+			pidStr := strings.TrimSpace(string(data))
+			if pidStr != "" {
+				pids = []string{pidStr}
+			}
+		}
 	}
 
-	pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+	// Fallback: pgrep all qwdtt processes
+	if len(pids) == 0 {
+		cmd := exec.Command("pgrep", "-f", "qwdtt")
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("process not found")
+		}
+		pids = strings.Split(strings.TrimSpace(string(output)), "\n")
+	}
+
 	if len(pids) == 0 {
 		return nil, fmt.Errorf("process not found")
 	}
 
+ 	selfPID := os.Getpid()
 	var totalCPU float64
 	var totalMem int64
+	var totalThreads int
 	foundProcess := false
 
 	for _, pid := range pids {
@@ -156,8 +174,8 @@ func getProcessUsage() (*ProcessUsage, error) {
 			continue
 		}
 
-		cmd = exec.Command("ps", "-p", pid, "-o", "%cpu,rss", "--no-headers")
-		output, err = cmd.Output()
+		cmd := exec.Command("ps", "-p", pid, "-o", "%cpu,rss", "--no-headers")
+		output, err := cmd.Output()
 		if err != nil {
 			continue
 		}
@@ -178,14 +196,36 @@ func getProcessUsage() (*ProcessUsage, error) {
 			totalMem += rss * 1024
 			foundProcess = true
 		}
+
+		// Read thread count from /proc/<pid>/status
+		statusData, err := os.ReadFile(fmt.Sprintf("/proc/%s/status", pid))
+		if err == nil {
+			for _, line := range strings.Split(string(statusData), "\n") {
+				if strings.HasPrefix(line, "Threads:") {
+					threadCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Threads:")))
+					if err == nil {
+						totalThreads += threadCount
+					}
+					break
+				}
+			}
+		}
 	}
 
 	if !foundProcess {
 		return nil, fmt.Errorf("no active connection process found")
 	}
 
+	// Workers ≈ threads - main thread - stdin reader goroutine - suspend monitor goroutine
+	workers := 0
+	if totalThreads > 3 {
+		workers = totalThreads - 3
+	}
+
 	return &ProcessUsage{
-		CPU:    totalCPU,
-		Memory: totalMem,
+		CPU:      totalCPU,
+		Memory:   totalMem,
+		Threads:  totalThreads,
+		Workers:  workers,
 	}, nil
 }

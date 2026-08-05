@@ -78,6 +78,9 @@ github.com/google/btree
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
+# github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0
+## explicit
+github.com/kardianos/osext
 # github.com/klauspost/compress v1.18.2
 ## explicit; go 1.23
 github.com/klauspost/compress
@@ -146,6 +149,9 @@ github.com/pion/turn/v5/internal/server
 # github.com/quic-go/qpack v0.6.0
 ## explicit; go 1.24
 github.com/quic-go/qpack
+# github.com/sevlyar/go-daemon v0.1.7
+## explicit; go 1.13
+github.com/sevlyar/go-daemon
 # github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5
 ## explicit
 github.com/tam7t/hpkp
