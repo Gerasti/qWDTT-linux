@@ -39,6 +39,31 @@ func logFilePath(profile string) string {
 	return filepath.Join(pidFilesDir(), "qwdtt-"+profile+".log")
 }
 
+// listLogProfileNames returns profile names that have existing log files.
+func listLogProfileNames() []string {
+	dir := pidFilesDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".log") || !strings.HasPrefix(name, "qwdtt-") {
+			continue
+		}
+		profile := strings.TrimSuffix(name, ".log")
+		profile = strings.TrimPrefix(profile, "qwdtt-")
+		if profile != "" {
+			names = append(names, profile)
+		}
+	}
+	return names
+}
+
 type DaemonManager struct {
 	profile    string
 	autoSwitch bool

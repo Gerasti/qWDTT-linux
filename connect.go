@@ -117,6 +117,14 @@ func connectCmd() {
 		log.Fatal("Профиль не указан и не удалось определить")
 	}
 
+	// Validate profile exists before daemonizing so we can report errors cleanly
+	if !*autoSwitch {
+		if _, err := loadProfile(daemonProfile); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не найден: %v\n", daemonProfile, err)
+			os.Exit(1)
+		}
+	}
+
 	// --- Pre-connection conflict checks (parent process) ---
 	// These checks run before daemonization so we can use notify/fmt freely.
 	if *autoSwitch {

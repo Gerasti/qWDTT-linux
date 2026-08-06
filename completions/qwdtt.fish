@@ -10,6 +10,11 @@ function __qwdtt_all_profiles
     qwdtt __complete_all 2>/dev/null
 end
 
+# Helper function to get profile names that have existing log files
+function __qwdtt_log_profiles
+    qwdtt __complete_logs 2>/dev/null
+end
+
 # Helper function to get disabled profile names
 function __qwdtt_disabled_profiles
     qwdtt __complete_disabled 2>/dev/null
@@ -44,6 +49,8 @@ complete -c qwdtt -n __fish_use_subcommand -a enable -d "Enable profile"
 complete -c qwdtt -n __fish_use_subcommand -a disable -d "Disable profile"
 complete -c qwdtt -n __fish_use_subcommand -a device-id -d "Show/set Device ID"
 complete -c qwdtt -n __fish_use_subcommand -a regenerate-id -d "Regenerate Device ID"
+complete -c qwdtt -n __fish_use_subcommand -a log -d "Show daemon log file"
+complete -c qwdtt -n __fish_use_subcommand -a test -d "Test profile connectivity"
 complete -c qwdtt -n __fish_use_subcommand -a version -d "Show version"
 complete -c qwdtt -n __fish_use_subcommand -a help -d "Show help"
 
@@ -79,3 +86,19 @@ complete -c qwdtt -n "__qwdtt_seen_command edit" -l priority -d "Profile priorit
 
 # add - flags only
 complete -c qwdtt -n "__qwdtt_seen_command add" -l device-id -d "Device ID"
+
+# log/lg - profile names from existing log files and flags
+complete -c qwdtt -n "__qwdtt_seen_command log lg" -a "(__qwdtt_log_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command log lg" -s n -l n -d "Number of lines to show"
+complete -c qwdtt -n "__qwdtt_seen_command log lg" -s f -l follow -d "Follow log in real-time"
+
+# test - profile names and flags
+complete -c qwdtt -n "__qwdtt_seen_command test" -a "(__qwdtt_all_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s ro -l ro -d "Test only read-only profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s en -l en -d "Test only enabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s enabled -l enabled -d "Test only enabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s dis -l dis -d "Test only disabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s disabled -l disabled -d "Test only disabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s timeout -l timeout -d "Connection timeout in seconds"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s mode -l mode -d "Connection mode" -a "tun socks"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-port -l socks-port -d "SOCKS5 port"

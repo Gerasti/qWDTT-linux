@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove list show share enable disable device-id regenerate-id version help"
+        local commands="connect disconnect debug add edit remove list show share enable disable device-id regenerate-id log test version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -39,6 +39,7 @@ _qwdtt_completions() {
         en) cmd="enable" ;;
         dis) cmd="disable" ;;
         id) cmd="device-id" ;;
+        lg) cmd="log" ;;
     esac
 
     # Complete profile names for commands that need them
@@ -86,6 +87,24 @@ _qwdtt_completions() {
             ;;
         device-id)
             # No completion for device-id argument
+            ;;
+        log)
+            if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
+                local log_profiles=$(qwdtt __complete_logs 2>/dev/null)
+                COMPREPLY=( $(compgen -W "$log_profiles" -- "$cur") )
+            elif [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "-n -follow -f" -- "$cur") )
+            fi
+            ;;
+        test)
+            if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
+                local all_profiles=$(qwdtt __complete_all 2>/dev/null)
+                COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
+            elif [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -timeout -mode -socks-port" -- "$cur") )
+            elif [[ $prev == "-mode" ]]; then
+                COMPREPLY=( $(compgen -W "tun socks" -- "$cur") )
+            fi
             ;;
         disconnect|debug)
             # These commands don't take arguments

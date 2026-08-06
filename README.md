@@ -27,15 +27,15 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 ```nix
 { config, lib, pkgs, ... }:
 let
-qwdtt-cli = builtins.getFlake "/etc/qWDTT-linux"; # local path after git clone
+qwdtt = builtins.getFlake "/etc/qWDTT-linux"; # local path after git clone
 # either with internet https://github.com/Gerasti/qWDTT-linux
 in
 {
   imports =
   [
-    qwdtt-cli.nixosModules.qwdtt-cli
+    qwdtt.nixosModules.qwdtt
   ];
-  services.qwdtt-cli = {
+  services.qwdtt = {
     enable = true;
     # package = pkgs.qwdtt;  # override package if needed
     deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
@@ -44,17 +44,17 @@ in
 
     profiles = {
     # read-only profiles can only be enabled/disabled
-      work = {
+      phone0 = {
         # alice has access to sops file
-        link = config.sops.secrets.work-server.path; # (path or string)
+        link = config.sops.secrets.phone0.path; # (path or string)
         priority = 100;
       };
-      home = {
-        link = config.sops.secrets.home-server.path;
+      phone1 = {
+        link = config.sops.secrets.phone1.path;
       };
-      guest = {
-        link = config.sops.secrets.guest-server.path;
-        deviceId = config.sops.secrets.wdtt-id-guest.path;
+      pc0 = {
+        link = config.sops.secrets.pc0.path;
+        deviceId = config.sops.secrets.pc0.path;
       };
     };
 

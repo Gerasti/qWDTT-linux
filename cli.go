@@ -29,9 +29,18 @@ Connection:
   disconnect [profile]        Disconnect from VPN (alias: discon)
                               If profile is not specified, disconnects active profile
   log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active)
-                              -n N: show last N lines; -f: follow in real-time
+                               -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s)
-                              (e.g., watch -n 1 qwdtt debug)
+                               (e.g., watch -n 1 qwdtt debug)
+  test [profile] [--ro] [--enabled] [--disabled]
+                               Test profile connectivity (VKAuth, Workers, Connect, InternetCheck)
+                               Without args: test all profiles
+                               -ro: test only read-only profiles
+                               -enabled/-en: test only enabled profiles
+                               -disabled/-dis: test only disabled profiles
+                               -mode tun|socks: connection mode (default: tun)
+                               -socks-port N: SOCKS5 port (default: 9050, with -mode socks)
+                               -timeout N: connection timeout in seconds (default: 10)
 
 Device ID Management:
   device-id [id]              Show or set Device ID (alias: id)
@@ -93,6 +102,13 @@ Examples:
   qwdtt log autoswitch -n 20       # show last 20 log lines
   qwdtt log autoswitch -f          # follow log in real-time
   qwdtt sh myserver
+  qwdtt test                       # test all profiles
+  qwdtt test myserver              # test specific profile
+  qwdtt test --ro                  # test all read-only profiles
+  qwdtt test --timeout 15          # set timeout to 15 seconds
+  qwdtt test --enabled             # test only enabled profiles
+  qwdtt test --disabled            # test only disabled profiles
+  qwdtt test --mode socks          # test in SOCKS5 mode
 `, version)
 }
 
@@ -132,6 +148,8 @@ func main() {
 		regenerateIDCmd()
 	case "log", "lg":
 		logCmd()
+	case "test":
+		testCmd()
 	case "version", "--version":
 		fmt.Printf("qwdtt v%s\n", version)
 	case "help", "-h", "--help":
@@ -146,6 +164,10 @@ func main() {
 		}
 	case "__complete_all":
 		for _, name := range listAllProfileNames() {
+			fmt.Println(name)
+		}
+	case "__complete_logs":
+		for _, name := range listLogProfileNames() {
 			fmt.Println(name)
 		}
 	default:

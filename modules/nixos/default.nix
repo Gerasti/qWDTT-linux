@@ -201,7 +201,42 @@ system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) {
     
 system.activationScripts.qwdtt-ro-profiles = mkIf (cfg.profiles != {}) {
       deps = [ "setupSecrets" ];
-      text = ''
+      text = let
+        currentProfiles = mapAttrsToList (name: profile: "ro-${name}") cfg.profiles;
+        currentProfilesStr = toString currentProfiles;
+      in ''
+        # Function to clean up stale ro-profiles not in current config
+        clean_stale_ro_profiles() {
+          local dir="$1"
+          [ -d "$dir" ] || return 0
+          for prof in "$dir"/ro-*.json; do
+            [ -f "$prof" ] || continue
+            local profname
+            profname=$(basename "$prof" .json)
+            local keep=0
+            for keep_name in ${currentProfilesStr}; do
+              if [ "$profname" = "$keep_name" ]; then
+                keep=1
+                break
+              fi
+            done
+            if [ "$keep" -eq 0 ]; then
+              rm -f "$prof"
+            fi
+          done
+        }
+
+        # Clean up stale ro-profiles for root
+        clean_stale_ro_profiles "/root/.config/qwdtt/ro-profiles"
+
+        # Clean up stale ro-profiles for each user
+        ${concatStringsSep "\n" (map (user: ''
+          USER_HOME=$(getent passwd ${user} | cut -d: -f6)
+          if [ -n "$USER_HOME" ]; then
+            clean_stale_ro_profiles "$USER_HOME/.config/qwdtt/ro-profiles"
+          fi
+        '') cfg.users)}
+
         # Create profiles for root
         mkdir -p /root/.config/qwdtt/ro-profiles
         chmod 700 /root/.config/qwdtt

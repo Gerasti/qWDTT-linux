@@ -53,11 +53,19 @@ func addCmd() {
 		DeviceID: devID,
 	}
 
+	// Check if profile already exists
+	_, err = loadProfile(name)
+	profileExisted := err == nil
+
 	if err := saveProfile(name, prof); err != nil {
 		log.Fatalf("Ошибка сохранения профиля: %v", err)
 	}
 
-	fmt.Printf("[OK] Профиль '%s' добавлен\n", name)
+	if profileExisted {
+		fmt.Printf("[OK] Профиль '%s' обновлён\n", name)
+	} else {
+		fmt.Printf("[OK] Профиль '%s' добавлен\n", name)
+	}
 	if link.Name != "" && link.Name != "Server" {
 		fmt.Printf("  Название: %s\n", link.Name)
 	}
@@ -649,6 +657,25 @@ func listDisabledProfileNames() []string {
 	return names
 }
 
+// listReadOnlyProfileNames returns profile names from the ro-profiles directory only.
+func listReadOnlyProfileNames() []string {
+	var names []string
+
+	entries, err := os.ReadDir(filepath.Join(configDir(), "ro-profiles"))
+	if err != nil {
+		return names
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+	}
+
+	return names
+}
+
 // Get list of currently running profiles by checking process command lines
 func getRunningProfiles() map[string]bool {
 	running := make(map[string]bool)
@@ -745,8 +772,10 @@ func isProfileRunning(profile string, runningProfiles map[string]bool) bool {
 
 func disconnectCmd() {
 	var targetProfile string
+	wasExplicitlySpecified := false
 	if len(os.Args) >= 3 {
 		targetProfile = os.Args[2]
+		wasExplicitlySpecified = true
 	}
 
 	// Collect all running profiles
@@ -768,9 +797,9 @@ func disconnectCmd() {
 		targetProfile = getActiveProfile()
 	}
 
-	// If still no target, or if there are multiple running profiles,
-	// show interactive selection
-	if targetProfile == "" || len(running) > 1 {
+	// If still no target, or if there are multiple running profiles and no
+	// explicit target was given, show interactive selection
+	if targetProfile == "" || (len(running) > 1 && !wasExplicitlySpecified) {
 		if len(running) == 0 {
 			fmt.Println("[!] Нет активного подключения и профиль не указан")
 			os.Exit(1)
@@ -1193,9 +1222,8 @@ func shareCmd() {
 	}
 
 	// Output
-	fmt.Printf("Профиль: %s\n", name)
-	fmt.Printf("Ссылка: %s\n\n", link)
 	fmt.Println("QR-код:")
 	qrterminal.Generate(link, qrterminal.L, os.Stdout)
+	fmt.Printf("Ссылка: \n%s\n\n", link)
 	fmt.Println()
 }
