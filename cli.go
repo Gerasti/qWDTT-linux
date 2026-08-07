@@ -16,9 +16,13 @@ Profile Management:
   add <name> <wdtt://...>     Add a new profile
   edit <name> [flags]         Edit an existing profile
   remove <name>               Remove a profile (alias: rm)
-  list                        Show all profiles (alias: ls)
+  list [<group>] [flags]      Show profiles, optionally filtered (alias: ls)
+                               -en/-enabled: enabled only
+                               -dis/-disabled: disabled only
+                               -ro: read-only profiles only
   show <name>                 Show profile details (alias: sh)
   share <name>                Show profile share link and QR code
+  							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
   enable <name>               Enable a profile (alias: en)
   disable <name>              Disable a profile (alias: dis)
 
@@ -32,7 +36,7 @@ Connection:
                                -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s)
                                (e.g., watch -n 1 qwdtt debug)
-  test [profile] [--ro] [--enabled] [--disabled]
+  test [profile or link] [--ro] [--enabled] [--disabled]
                                Test profile connectivity (VKAuth, Workers, Connect, InternetCheck)
                                Without args: test all profiles
                                -ro: test only read-only profiles
@@ -81,6 +85,7 @@ Edit Flags:
   -device-id ID               Change Device ID
   -listen ADDR                Change local UDP address (default: 127.0.0.1:9000)
   -priority N                 Set profile priority (higher = earlier with -auto-switch)
+  -groups G1,G2               Set profile groups (comma-separated, "" or none to clear)
 
 Examples:
   qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
@@ -99,7 +104,9 @@ Examples:
   qwdtt edit myserver -password newpass
   qwdtt edit myserver -priority 100  # set high priority
   qwdtt ls
-  qwdtt log autoswitch -n 20       # show last 20 log lines
+  qwdtt ls work                      # show profiles in group "work"
+  qwdtt ls -ro                       # show only read-only profiles
+  qwdtt ls -en                       # show only enabled profiles  qwdtt log autoswitch -n 20       # show last 20 log lines
   qwdtt log autoswitch -f          # follow log in real-time
   qwdtt sh myserver
   qwdtt test                       # test all profiles
@@ -169,6 +176,20 @@ func main() {
 	case "__complete_logs":
 		for _, name := range listLogProfileNames() {
 			fmt.Println(name)
+		}
+	case "__complete_groups":
+		seen := make(map[string]bool)
+		for _, name := range listAllProfileNames() {
+			prof, err := loadProfile(name)
+			if err != nil {
+				continue
+			}
+			for _, g := range prof.Groups {
+				if !seen[g] {
+					seen[g] = true
+					fmt.Println(g)
+				}
+			}
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)

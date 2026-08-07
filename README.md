@@ -173,7 +173,10 @@ qwdtt disconnect
 
 # Управление
 qwdtt ls                    # список
+qwdtt ls work               # список профилей в группе "work"
 qwdtt edit myserver -priority 100
+qwdtt edit myserver -groups work,personal
+qwdtt edit myserver -groups ""
 qwdtt disable myserver
 qwdtt share myserver        # QR-код и share-ссылка
 ```
@@ -189,7 +192,7 @@ qwdtt debug                          - Показать debug информаци
 qwdtt add <name> <wdtt://...>        - Добавить профиль
 qwdtt edit <name> [флаги]            - Редактировать профиль
 qwdtt remove <name>                  - Удалить профиль (alias: rm)
-qwdtt list                           - Список профилей (alias: ls)
+qwdtt list [<group>] [флаги]            - Список профилей (alias: ls)
 qwdtt show <name>                    - Показать профиль (alias: sh)
 qwdtt enable <name>                  - Включить профиль (alias: en)
 qwdtt disable <name>                 - Отключить профиль (alias: dis)
@@ -215,6 +218,7 @@ dis    - disable
 ## Флаги connect
 
 - `-auto-switch` - переключение между профилями при сбоях
+- `-auto-stop` - остановить запущенный профиль (или autoswitch), либо запустить если не запущен
 - `-workers N` - количество воркеров (кратно 9, default: 9)
 - `-mtu N` - MTU туннеля (default: 1280, max: 1500)
 - `-timeout N` - таймаут для auto-switch (default: 120)
@@ -231,6 +235,15 @@ dis    - disable
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
 - `-log` - выводить лог демона в терминал в реальном времени
 
+## Флаги list
+
+- `-en` / `-enabled` - показать только включённые профили
+- `-dis` / `-disabled` - показать только отключённые профили
+- `-ro` - показать только read-only профили
+- `<group>` - позиционный аргумент: показать только профили в указанной группе
+
+  Примеры: `qwdtt ls work`, `qwdtt ls -ro`, `qwdtt ls -en work`
+
 ## Флаги edit
 
 - `-peer ADDR` - изменить адрес сервера (IP:PORT)
@@ -239,6 +252,7 @@ dis    - disable
 - `-device-id ID` - изменить Device ID
 - `-listen ADDR` - изменить локальный UDP адрес (default: 127.0.0.1:9000)
 - `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
+- `-groups G1,G2` - установить группы профиля (через запятую, "" или "none" для очистки)
 
 ## Auto-switch и режимы подключения
 

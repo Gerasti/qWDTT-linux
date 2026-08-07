@@ -93,7 +93,15 @@ func editCmd() {
 	deviceID := fs.String("device-id", "", "Device ID")
 	listen := fs.String("listen", "", "Локальный адрес")
 	priority := fs.Int("priority", -1, "Приоритет (чем выше, тем раньше)")
+	groups := fs.String("groups", "", "Группы через запятую (пустая строка или none для очистки)")
 	fs.Parse(os.Args[3:])
+
+	groupsChanged := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "groups" {
+			groupsChanged = true
+		}
+	})
 
 	prof, err := loadProfile(name)
 	if err != nil {
@@ -144,9 +152,28 @@ func editCmd() {
 		fmt.Printf("[*] Приоритет изменён: %d\n", *priority)
 	}
 
+	if groupsChanged {
+		val := strings.TrimSpace(*groups)
+		if val == "" || val == "none" {
+			prof.Groups = nil
+			changed = true
+			fmt.Println("[*] Группы очищены")
+		} else {
+			prof.Groups = nil
+			for _, g := range strings.Split(val, ",") {
+				g = strings.TrimSpace(g)
+				if g != "" && g != "none" {
+					prof.Groups = append(prof.Groups, g)
+				}
+			}
+			changed = true
+			fmt.Printf("[*] Группы изменены: %v\n", prof.Groups)
+		}
+	}
+
 	if !changed {
 		fmt.Println("[!] Не указаны параметры для изменения")
-		fmt.Println("Используйте: -peer, -password, -hashes, -device-id, -listen или -priority")
+		fmt.Println("Используйте: -peer, -password, -hashes, -device-id, -listen, -priority или -groups")
 		os.Exit(1)
 	}
 
@@ -178,17 +205,18 @@ func removeCmd() {
 }
 
 func listCmd() {
-	type profileInfo struct {
-		name      string
-		peer      string
-		hashes    int
-		status    string
-		priority  int
-		active    bool
-		mode      string // "tun" or "socks" (only set if active)
-		socksPort int    // SOCKS5 port (only set if active)
-		readOnly  bool
-	}
+ 	type profileInfo struct {
+ 		name      string
+ 		peer      string
+ 		hashes    int
+ 		status    string
+ 		priority  int
+ 		groups    []string
+ 		active    bool
+ 		mode      string // "tun" or "socks" (only set if active)
+ 		socksPort int    // SOCKS5 port (only set if active)
+ 		readOnly  bool
+ 	}
 
 	var regularProfiles []profileInfo
 	var readOnlyProfiles []profileInfo
@@ -249,6 +277,7 @@ func listCmd() {
 				hashes:    len(prof.Hashes),
 				status:    status,
 				priority:  prof.Priority,
+				groups:    prof.Groups,
 				active:    active,
 				mode:      mode,
 				socksPort: socksPort,
@@ -276,6 +305,70 @@ func listCmd() {
 	// Read read-only profiles
 	readProfilesFromDir(filepath.Join(configDir(), "ro-profiles"), true)
 
+	// Parse filter flags
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	en := fs.Bool("en", false, "Show only enabled profiles")
+	enabled := fs.Bool("enabled", false, "Show only enabled profiles")
+	dis := fs.Bool("dis", false, "Show only disabled profiles")
+	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
+	ro := fs.Bool("ro", false, "Show only read-only profiles")
+
+	var groupFilter string
+	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
+		groupFilter = os.Args[2]
+		fs.Parse(os.Args[3:])
+	} else {
+		fs.Parse(os.Args[2:])
+		if fs.NArg() > 0 {
+			groupFilter = fs.Arg(0)
+		}
+	}
+
+	showEnabled := *en || *enabled
+	showDisabled := *dis || *disabled
+	if showEnabled && showDisabled {
+		fmt.Fprintln(os.Stderr, "[ERROR] Нельзя одновременно использовать -enabled и -disabled")
+		os.Exit(1)
+	}
+
+	// Optional group filter: qwdtt list <group_name>
+	if groupFilter != "" {
+		filterByGroup := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				for _, g := range p.groups {
+					if g == groupFilter {
+						filtered = append(filtered, p)
+						break
+					}
+				}
+			}
+			return filtered
+		}
+		regularProfiles = filterByGroup(regularProfiles)
+		readOnlyProfiles = filterByGroup(readOnlyProfiles)
+	}
+
+	// Filter by enabled/disabled status
+	if showEnabled || showDisabled {
+		filterByStatus := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				if (showEnabled && p.status == "enabled") || (showDisabled && p.status == "disabled") {
+					filtered = append(filtered, p)
+				}
+			}
+			return filtered
+		}
+		regularProfiles = filterByStatus(regularProfiles)
+		readOnlyProfiles = filterByStatus(readOnlyProfiles)
+	}
+
+	// Filter: -ro shows only read-only profiles
+	if *ro {
+		regularProfiles = nil
+	}
+
 	// Sort profiles by priority (highest first), then by name
 	sortProfilesByPriority := func(profiles []profileInfo) {
 		sort.Slice(profiles, func(i, j int) bool {
@@ -289,7 +382,25 @@ func listCmd() {
 	sortProfilesByPriority(readOnlyProfiles)
 
 	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 {
-		fmt.Println("Нет сохранённых профилей")
+		var conditions []string
+		if showEnabled {
+			conditions = append(conditions, "включённых")
+		}
+		if showDisabled {
+			conditions = append(conditions, "отключённых")
+		}
+		if *ro {
+			conditions = append(conditions, "read-only")
+		}
+		suffix := ""
+		if len(conditions) > 0 {
+			suffix = fmt.Sprintf(" (%s)", strings.Join(conditions, ", "))
+		}
+		if groupFilter != "" {
+			fmt.Printf("Нет профилей в группе '%s'%s\n", groupFilter, suffix)
+		} else {
+			fmt.Println("Нет сохранённых профилей" + suffix)
+		}
 		return
 	}
 
@@ -347,15 +458,21 @@ func listCmd() {
 				coloredPaddedMode = colorYellow + paddedMode + colorReset
 			}
 
-			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s\n",
-				activeMarker,
-				maxNameLen, p.name,
-				maxPeerLen, p.peer,
-				p.hashes,
-				coloredStatus,
-				p.priority,
-				coloredPaddedMode,
-				autoswitchMarker)
+			groupsStr := ""
+			if len(p.groups) > 0 {
+				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
+			}
+
+			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s%s\n",
+					activeMarker,
+					maxNameLen, p.name,
+					maxPeerLen, p.peer,
+					p.hashes,
+					coloredStatus,
+					p.priority,
+					groupsStr,
+					coloredPaddedMode,
+					autoswitchMarker)
 		}
 	}
 
@@ -382,6 +499,19 @@ func listCmd() {
 			fmt.Printf("[*] Текущий профиль autoswitch: %s%s%s\n", colorYellow, currentAutoswitchProfile, colorReset)
 		} else {
 			fmt.Println("[*] Текущий профиль autoswitch: (нет активного подключения)")
+		}
+	} else {
+		activeProfile := getActiveProfile()
+		if activeProfile != "" {
+			modeStr := ""
+			if d, ok := runningDetails[activeProfile]; ok {
+				if d.Mode == "socks" {
+					modeStr = fmt.Sprintf(" [socks:%d]", d.SocksPort)
+				} else {
+					modeStr = " [tun]"
+				}
+			}
+			fmt.Printf("\n[*] Текущий профиль: %s%s%s%s\n", colorYellow, activeProfile, colorReset, modeStr)
 		}
 	}
 }
@@ -421,6 +551,9 @@ func showCmd() {
 	}
 	fmt.Printf("  Status: %s\n", status)
 	fmt.Printf("  Priority: %d\n", prof.Priority)
+	if len(prof.Groups) > 0 {
+		fmt.Printf("  Groups: %s\n", strings.Join(prof.Groups, ", "))
+	}
 
 	// Show runtime mode (tun/socks) if the profile is currently running
 	details := getRunningProfileDetails()
@@ -1224,6 +1357,5 @@ func shareCmd() {
 	// Output
 	fmt.Println("QR-код:")
 	qrterminal.Generate(link, qrterminal.L, os.Stdout)
-	fmt.Printf("Ссылка: \n%s\n\n", link)
-	fmt.Println()
+	fmt.Printf("Ссылка: \n%s", link)
 }

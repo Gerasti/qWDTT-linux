@@ -137,11 +137,7 @@ func teardownWG() error {
 		exec.Command("ip", "route", "del", ip).Run()
 	}
 	routedTurnIPs = nil
-	cmd := exec.Command("ip", "link", "del", wgIface)
-	if err := cmd.Run(); err != nil {
-		return nil
-	}
-	return nil
+	return exec.Command("ip", "link", "del", wgIface).Run()
 }
 
 func testWGConnectivity() error {

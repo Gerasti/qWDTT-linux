@@ -18,6 +18,7 @@ type ProfileData struct {
 	DeviceID string   `json:"device_id,omitempty"`
 	Priority int      `json:"priority,omitempty"`
 	LinkFile string   `json:"link_file,omitempty"` // Path to file containing wdtt:// URL
+	Groups   []string `json:"groups,omitempty"`   // Labels for organizing profiles
 }
 
 func profilePath(name string) string {

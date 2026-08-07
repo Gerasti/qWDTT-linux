@@ -65,6 +65,7 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l timeout -d "Connectio
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "tun socks"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-port -d "SOCKS5 port (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-stop -d "Stop running profile, or start if not running"
 
 # show, remove - all profile names
 complete -c qwdtt -n "__qwdtt_seen_command show sh remove rm share" -a "(__qwdtt_all_profiles)" -d "Profile"
@@ -83,6 +84,7 @@ complete -c qwdtt -n "__qwdtt_seen_command edit" -l hashes -d "VK hashes (comma-
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l device-id -d "Device ID"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l listen -d "Local address"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l priority -d "Profile priority"
+complete -c qwdtt -n "__qwdtt_seen_command edit" -l groups -d "Profile groups (comma-separated)"
 
 # add - flags only
 complete -c qwdtt -n "__qwdtt_seen_command add" -l device-id -d "Device ID"
@@ -91,6 +93,14 @@ complete -c qwdtt -n "__qwdtt_seen_command add" -l device-id -d "Device ID"
 complete -c qwdtt -n "__qwdtt_seen_command log lg" -a "(__qwdtt_log_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command log lg" -s n -l n -d "Number of lines to show"
 complete -c qwdtt -n "__qwdtt_seen_command log lg" -s f -l follow -d "Follow log in real-time"
+
+# list/ls - optional group filter and flags
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -a "(qwdtt __complete_groups 2>/dev/null)" -d "Group"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l en -d "Show only enabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l enabled -d "Show only enabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l dis -d "Show only disabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l disabled -d "Show only disabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l ro -d "Show only read-only profiles"
 
 # test - profile names and flags
 complete -c qwdtt -n "__qwdtt_seen_command test" -a "(__qwdtt_all_profiles)" -d "Profile"

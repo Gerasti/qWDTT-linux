@@ -94,6 +94,7 @@ func connectCmd() {
 	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
+	autoStop := fs.Bool("auto-stop", false, "Stop running profile, or start if not running")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -127,6 +128,45 @@ func connectCmd() {
 
 	// --- Pre-connection conflict checks (parent process) ---
 	// These checks run before daemonization so we can use notify/fmt freely.
+
+	// Handle --auto-stop: if the target profile is already running, stop it
+	// and exit (don't connect). If not running, fall through to normal connect.
+	if *autoStop {
+		if *autoSwitch && isDaemonRunning("autoswitch") {
+			fmt.Printf("[*] Остановка авто-переключения...\n")
+			if !killByPidFile("autoswitch") {
+				killByPgrep("autoswitch")
+			}
+			if activeProfile := getActiveProfile(); activeProfile == "autoswitch" {
+				clearAutoswitchCurrentProfile()
+				clearActiveProfile()
+			}
+			if isKernelInterfaceActive() {
+				if err := teardownWG(); err == nil {
+					fmt.Println("[OK] WireGuard конфиг удален")
+				}
+			}
+			fmt.Println("[OK] Авто-переключение остановлено")
+			os.Exit(0)
+		} else if !*autoSwitch && isDaemonRunning(daemonProfile) {
+			fmt.Printf("[*] Остановка профиля '%s'...\n", daemonProfile)
+			if !killByPidFile(daemonProfile) {
+				fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
+				killByPgrep(daemonProfile)
+			}
+			activeProfile := getActiveProfile()
+			if activeProfile == daemonProfile {
+				if err := teardownWG(); err == nil {
+					fmt.Println("[OK] WireGuard конфиг удален")
+				}
+				clearActiveProfile()
+			}
+			notifyDisconnectedSync(daemonProfile)
+			fmt.Printf("[OK] Профиль '%s' остановлен\n", daemonProfile)
+			os.Exit(0)
+		}
+	}
+
 	if *autoSwitch {
 		// Check if autoswitch daemon is already running
 		if isDaemonRunning("autoswitch") {

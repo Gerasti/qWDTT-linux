@@ -73,6 +73,15 @@ func testCmd() {
 
 	var targetProfiles []string
 	if profileName != "" {
+		if strings.HasPrefix(profileName, "wdtt://") {
+			link, err := parseWdttURL(profileName)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] Неверная ссылка: %v\n", err)
+				os.Exit(1)
+			}
+			testProfileFromLink(*link, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, profileName)
+			return
+		}
 		if *ro && !strings.HasPrefix(profileName, "ro-") {
 			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не является read-only\n", profileName)
 			os.Exit(1)
@@ -375,6 +384,173 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 // testInternetCheck pings 8.8.8.8 and 1.1.1.1 through the tunnel/proxy.
 // In tun mode, pings directly through the wg-qwdtt interface.
 // In socks mode, uses curl via the SOCKS5 proxy.
+func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, linkStr string) TestResult {
+	origLogOutput := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(origLogOutput)
+
+	result := TestResult{
+		Profile:       linkStr,
+		VKAuth:        "✗",
+		Connect:       "✗",
+		InternetCheck: "n/a",
+		Workers:       0,
+	}
+
+	fmt.Printf("=== Testing: %s ===\n", linkStr)
+
+	deviceID := getOrCreateDeviceID()
+
+	cfg := core.Config{
+		PeerAddr:    fmt.Sprintf("%s:%s", link.IP, link.DTLSPort),
+		Password:    link.Password,
+		Hashes:      link.Hashes,
+		Listen:      "127.0.0.1:9000",
+		TurnHost:    "",
+		TurnPort:    "",
+		DeviceID:    deviceID,
+		Workers:     9,
+		CaptchaMode: "auto",
+		MTU:         1280,
+		DNS:         "yandex",
+		Mode:        mode,
+		SocksPort:   socksPort,
+	}
+	if mode == "socks" {
+		cfg.Listen = "127.0.0.1:0"
+	} else if cfg.Listen == "" {
+		cfg.Listen = "127.0.0.1:9000"
+	}
+
+	c := core.New(cfg)
+	defer c.Stop()
+
+	events, err := c.Start()
+	if err != nil {
+		result.Error = err.Error()
+		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)
+		fmt.Printf("  [✗] Workers: 0\n")
+		fmt.Printf("  [✗] Connect\n")
+		fmt.Printf("  [✗] InternetCheck (n/a)\n")
+		fmt.Printf("  → FAIL\n\n")
+		return result
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	vkAuthPassed := false
+	connectPassed := false
+	workersPassed := false
+	wgApplied := false
+	var wr *core.WireproxyRunner
+
+	done := false
+	for !done {
+		select {
+		case <-timer.C:
+			done = true
+		case ev, ok := <-events:
+			if !ok {
+				done = true
+				continue
+			}
+			switch ev.Type {
+			case core.EventState:
+				if ev.Status == "connecting" {
+					fmt.Printf("  [*] Подключение...\n")
+				}
+			case core.EventLog:
+				if strings.Contains(ev.Message, "[VK Auth] Success") && !vkAuthPassed {
+					vkAuthPassed = true
+					result.VKAuth = "✓"
+					fmt.Printf("  [✓] VKAuth\n")
+				}
+			case core.EventEvent:
+				if ev.Name == "wg_config" && !connectPassed {
+					wgApplied = true
+					connectErr := error(nil)
+					if cfg.Mode == "socks" {
+						wr = core.NewWireproxyRunner(cfg.SocksPort)
+						connectErr = wr.Start(context.Background(), ev.Data)
+					} else {
+						turnIPs := c.GetTurnIPs()
+						connectErr = applyWGConfig(ev.Data, turnIPs)
+					}
+					if connectErr != nil {
+						fmt.Printf("  [✗] Connect (%v)\n", connectErr)
+						done = true
+						continue
+					}
+					connectPassed = true
+					result.Connect = "✓"
+					fmt.Printf("  [✓] Connect (%s)\n", cfg.Mode)
+					if cfg.Mode == "tun" {
+						result.InternetCheck = testInternetCheck("tun", 0)
+					} else {
+						result.InternetCheck = testInternetCheck("socks", cfg.SocksPort)
+					}
+				}
+				if ev.Name == "captcha_required" {
+					parts := strings.Split(ev.Data, "|")
+					if len(parts) >= 1 {
+						fmt.Printf("  [!] Капча требуется (режим: %s)\n", parts[0])
+					}
+				}
+				if ev.Name == "workers_completed" {
+					done = true
+				}
+			case core.EventStats:
+				if ev.Workers > 0 && !workersPassed {
+					workersPassed = true
+					result.Workers = ev.Workers
+					fmt.Printf("  [✓] Workers: %d\n", ev.Workers)
+				}
+			case core.EventError:
+				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
+				done = true
+			}
+		}
+	}
+
+	c.Stop()
+	drained := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(3 * time.Second):
+	}
+
+	if wgApplied {
+		if cfg.Mode == "socks" && wr != nil {
+			_ = wr.Stop()
+		} else {
+			_ = teardownWG()
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if !vkAuthPassed {
+		fmt.Printf("  [✗] VKAuth\n")
+	}
+	if !workersPassed {
+		fmt.Printf("  [✗] Workers: 0\n")
+	}
+
+	allPassed := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+	if allPassed {
+		fmt.Printf("  → PASS\n\n")
+	} else {
+		fmt.Printf("  → FAIL\n\n")
+	}
+
+	return result
+}
+
 func testInternetCheck(mode string, socksPort int) string {
 	hosts := []string{"8.8.8.8", "1.1.1.1"}
 
