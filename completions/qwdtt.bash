@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove list show share enable disable device-id regenerate-id log test version help"
+        local commands="connect disconnect debug add edit remove list show share enable disable import device-id regenerate-id log test version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do

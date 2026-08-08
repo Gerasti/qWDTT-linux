@@ -25,6 +25,7 @@ Profile Management:
   							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
   enable <name>               Enable a profile (alias: en)
   disable <name>              Disable a profile (alias: dis)
+  import <file> [-dry-run]    Import profiles from JSON or ZIP file
 
 Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
@@ -149,6 +150,8 @@ func main() {
 		enableCmd()
 	case "disable", "dis":
 		disableCmd()
+	case "import":
+		importCmd()
 	case "device-id", "id":
 		deviceIDCmd()
 	case "regenerate-id":

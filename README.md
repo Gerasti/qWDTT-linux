@@ -141,6 +141,10 @@ cp completions/qwdtt.fish ~/.config/fish/completions/
 # Добавить профиль
 qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
 
+# Импорт профилей из JSON (например, экспорт из мобильного клиента)
+qwdtt import /path/to/profiles.json
+qwdtt import profiles.json -dry-run      # просмотр без сохранения
+
 # Подключиться
 qwdtt con myserver
 
@@ -196,6 +200,7 @@ qwdtt list [<group>] [флаги]            - Список профилей (al
 qwdtt show <name>                    - Показать профиль (alias: sh)
 qwdtt enable <name>                  - Включить профиль (alias: en)
 qwdtt disable <name>                 - Отключить профиль (alias: dis)
+qwdtt import <file.json> [-dry-run]  - Импортировать профили из JSON
 qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
 qwdtt regenerate-id                  - Перегенерировать Device ID
 qwdtt version                        - Версия

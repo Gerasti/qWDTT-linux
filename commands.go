@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/zip"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -1357,5 +1360,201 @@ func shareCmd() {
 	// Output
 	fmt.Println("QR-код:")
 	qrterminal.Generate(link, qrterminal.L, os.Stdout)
-	fmt.Printf("Ссылка: \n%s", link)
+	fmt.Printf("Ссылка: \n%s\n", link)
+
+}
+
+type importProfile struct {
+	Name           string `json:"name"`
+	Peer           string `json:"peer"`
+	VKHashes       string `json:"vkHashes"`
+	WorkersPerHash int    `json:"workersPerHash"`
+	ListenPort     int    `json:"listenPort"`
+	Password       string `json:"password"`
+	GroupName      string `json:"groupName"`
+}
+
+func importCmd() {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "Показать профили без сохранения")
+	fs.Parse(os.Args[2:])
+
+	args := fs.Args()
+	if len(args) < 1 || args[0] == "" {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt import <file.json|file.zip> [-dry-run]\n")
+		os.Exit(1)
+	}
+
+	path := args[0]
+
+	entries, err := loadImportEntries(path)
+	if err != nil {
+		log.Fatalf("Ошибка загрузки: %v", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("[!] В файле нет профилей")
+		return
+	}
+
+	var imported, skipped int
+	var savedNames []string
+
+	for _, entry := range entries {
+		name := normalizeImportName(entry.Name)
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "[!] Пропущен профиль с пустым именем\n")
+			skipped++
+			continue
+		}
+
+		finalName := name
+		counter := 1
+		for {
+			_, err := loadProfile(finalName)
+			if err != nil {
+				break
+			}
+			finalName = fmt.Sprintf("%s(%d)", name, counter)
+			counter++
+		}
+
+		if finalName != name {
+			fmt.Printf("[*] Конфликт имени: '%s' → '%s'\n", name, finalName)
+		}
+
+		prof := ProfileData{
+			PeerAddr: entry.Peer,
+			Password: entry.Password,
+			Hashes:   []string{entry.VKHashes},
+		}
+
+		if entry.ListenPort > 0 {
+			prof.Listen = fmt.Sprintf("127.0.0.1:%d", entry.ListenPort)
+		}
+
+		if entry.GroupName != "" {
+			prof.Groups = []string{entry.GroupName}
+		}
+
+		if *dryRun {
+			fmt.Printf("[dry-run] %s  peer=%s  hashes=%d  listen=%s  groups=%v\n",
+				finalName, prof.PeerAddr, len(prof.Hashes), prof.Listen, prof.Groups)
+			savedNames = append(savedNames, finalName)
+			continue
+		}
+
+		if err := saveProfile(finalName, prof); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Не удалось сохранить профиль '%s': %v\n", finalName, err)
+			skipped++
+			continue
+		}
+
+		savedNames = append(savedNames, finalName)
+		imported++
+	}
+
+	if *dryRun {
+		fmt.Printf("\n[dry-run] %d профилей будет импортировано\n", len(savedNames))
+	} else {
+		fmt.Printf("\n[OK] Импортировано: %d профилей, пропущено: %d\n", imported, skipped)
+	}
+}
+
+func normalizeImportName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, " ", "_")
+	return name
+}
+
+func loadImportEntries(path string) ([]importProfile, error) {
+	lower := strings.ToLower(path)
+	isZipByExt := strings.HasSuffix(lower, ".zip")
+
+	if isZipByExt {
+		return loadImportFromZip(path)
+	}
+
+	if strings.HasSuffix(lower, ".json") {
+		return loadImportFromJSONFile(path)
+	}
+
+	// Auto-detect by magic bytes
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка открытия файла '%s': %w", path, err)
+	}
+	header := make([]byte, 4)
+	n, _ := io.ReadFull(f, header)
+	f.Close()
+
+	if n >= 2 && header[0] == 'P' && header[1] == 'K' {
+		return loadImportFromZip(path)
+	}
+
+	return loadImportFromJSONFile(path)
+}
+
+func loadImportFromJSONFile(path string) ([]importProfile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения файла '%s': %w", path, err)
+	}
+	return parseImportJSON(data)
+}
+
+func parseImportJSON(data []byte) ([]importProfile, error) {
+	var entries []importProfile
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга JSON: %w", err)
+	}
+	return entries, nil
+}
+
+func loadImportFromZip(path string) ([]importProfile, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка открытия ZIP архива '%s': %w", path, err)
+	}
+	defer reader.Close()
+
+	var allEntries []importProfile
+	var jsonFound bool
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		lowerName := strings.ToLower(filepath.Base(file.Name))
+		if !strings.HasSuffix(lowerName, ".json") {
+			continue
+		}
+		jsonFound = true
+
+		rc, err := file.Open()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Не удалось открыть '%s' в архиве: %v\n", file.Name, err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Не удалось прочитать '%s' из архива: %v\n", file.Name, err)
+			continue
+		}
+
+		entries, err := parseImportJSON(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Ошибка парсинга '%s' в архиве: %v\n", file.Name, err)
+			continue
+		}
+
+		allEntries = append(allEntries, entries...)
+	}
+
+	if !jsonFound {
+		return nil, fmt.Errorf("в архиве не найдено JSON файлов")
+	}
+
+	return allEntries, nil
 }
