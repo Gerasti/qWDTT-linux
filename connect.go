@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,10 @@ func connectCmd() {
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
 	autoStop := fs.Bool("auto-stop", false, "Stop running profile, or start if not running")
+	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Comma-separated. TUN mode only")
+	fs.StringVar(blackList, "bl", "", "Alias for --black-list")
+	blackListFile := fs.String("black-list-file", "", "Read black-list domains from JSON file (bypassRoutes field). Can combine with -bl. TUN mode only")
+	fs.StringVar(blackListFile, "bl-file", "", "Alias for --black-list-file")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -116,6 +121,46 @@ func connectCmd() {
 	}
 	if daemonProfile == "" {
 		log.Fatal("Профиль не указан и не удалось определить")
+	}
+
+	// --- Split tunneling validation (before daemonizing) ---
+	var splitCfg *splitTunnelConfig
+	if *blackList != "" || *blackListFile != "" {
+		if *mode != "tun" {
+			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режиме -mode tun")
+			os.Exit(1)
+		}
+		if *blackListFile != "" {
+			if !filepath.IsAbs(*blackListFile) {
+				if abs, err := filepath.Abs(*blackListFile); err == nil {
+					*blackListFile = abs
+				}
+			}
+			for i, arg := range os.Args {
+				if (arg == "--bl-file" || arg == "-bl-file") && i+1 < len(os.Args) {
+					os.Args[i+1] = *blackListFile
+					break
+				}
+				if strings.HasPrefix(arg, "--bl-file=") {
+					os.Args[i] = "--bl-file=" + *blackListFile
+					break
+				}
+				if strings.HasPrefix(arg, "-bl-file=") {
+					os.Args[i] = "-bl-file=" + *blackListFile
+					break
+				}
+			}
+		}
+		blDomains := splitDomains(*blackList)
+		if *blackListFile != "" {
+			fileDomains, err := loadBypassRoutesFile(*blackListFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+				os.Exit(1)
+			}
+			blDomains = append(blDomains, fileDomains...)
+		}
+		splitCfg = &splitTunnelConfig{mode: "blacklist", domains: blDomains, rawBl: *blackList, rawFile: *blackListFile}
 	}
 
 	// Validate profile exists before daemonizing so we can report errors cleanly
@@ -146,6 +191,9 @@ func connectCmd() {
 					fmt.Println("[OK] WireGuard конфиг удален")
 				}
 			}
+			if cur := getAutoswitchCurrentProfile(); cur != "" {
+				removeSplitCfg(cur)
+			}
 			fmt.Println("[OK] Авто-переключение остановлено")
 			os.Exit(0)
 		} else if !*autoSwitch && isDaemonRunning(daemonProfile) {
@@ -154,6 +202,7 @@ func connectCmd() {
 				fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
 				killByPgrep(daemonProfile)
 			}
+			removeSplitCfg(daemonProfile)
 			activeProfile := getActiveProfile()
 			if activeProfile == daemonProfile {
 				if err := teardownWG(); err == nil {
@@ -171,6 +220,17 @@ func connectCmd() {
 		// Check if autoswitch daemon is already running
 		if isDaemonRunning("autoswitch") {
 			msg := "Авто-переключение уже запущено (PID file: qwdtt-autoswitch.pid). Используйте qwdtt discon для остановки."
+			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			notifyError("autoswitch", msg)
+			os.Exit(1)
+		}
+		if *mode == "tun" && isKernelInterfaceActive() {
+			activeProfile := getActiveProfile()
+			target := activeProfile
+			if target == "" {
+				target = "другой процесс"
+			}
+			msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется (профиль: %s). Используйте qwdtt discon для остановки.", target)
 			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
 			notifyError("autoswitch", msg)
 			os.Exit(1)
@@ -228,7 +288,11 @@ func connectCmd() {
 		sockPath := socketPath(dm.daemonProfileName())
 		logFile := logFilePath(dm.daemonProfileName())
 
-		sockErr := waitForSocket(sockPath, 3*time.Second)
+		sockTimeout := 3 * time.Second
+		if *autoSwitch {
+			sockTimeout = 15 * time.Second
+		}
+		sockErr := waitForSocket(sockPath, sockTimeout)
 		if sockErr != nil {
 			fmt.Fprintf(os.Stderr, "[WARNING] Демон запущен, но сокет недоступен: %v\n", sockErr)
 		}
@@ -375,6 +439,7 @@ func connectCmd() {
 					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
 					*autoSwitch, *mode, *socksPort,
 					sigCh, stopCh, cs.SolveChan(), sw.get(),
+					splitCfg,
 					false,        // shouldSetActive: handled in connectCmd for non-autoswitch
 					!*autoSwitch, // skipActiveProfileClear: clear only in non-autoswitch mode
 				)
@@ -425,9 +490,12 @@ func tryConnectProfile(
 	stopCh chan struct{},
 	captchaCh <-chan string,
 	switchProfileCh chan struct{},
+	splitCfg *splitTunnelConfig,
 	shouldSetActive bool,
 	skipActiveProfileClear bool,
 ) (connected bool, wasResume bool) {
+	defer removeSplitCfg(profileName)
+
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		notifyError(profileName, "Ошибка загрузки профиля")
@@ -653,7 +721,7 @@ func tryConnectProfile(
 					} else {
 						turnIPs := c.GetTurnIPs()
 						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
-						if err := applyWGConfig(ev.Data, turnIPs); err != nil {
+						if err := applyWGConfig(ev.Data, turnIPs, splitCfg); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
 							fmt.Println("  Убедитесь, что:")
@@ -679,9 +747,14 @@ func tryConnectProfile(
 							}
 							return false, false
 						}
-						fmt.Println("[OK] Туннель работает корректно")
-						fmt.Println("[*] Весь трафик теперь идет через VPN")
-						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
+					fmt.Println("[OK] Туннель работает корректно")
+					fmt.Println("[*] Весь трафик теперь идет через VPN")
+
+					if splitCfg != nil {
+						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+					}
+
+					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
 							if err := setAutoswitchCurrentProfile(profileName); err != nil {
 								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)

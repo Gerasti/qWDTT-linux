@@ -257,9 +257,11 @@ func getProcessUsage() (*ProcessUsage, error) {
 
 // ProfileDetails holds information about a running qwdtt profile process.
 type ProfileDetails struct {
-	Mode     string // "tun" or "socks"
-	SocksPort int    // SOCKS5 port (only relevant for socks mode)
-	PID      int    // Process PID
+	Mode          string // "tun" or "socks"
+	SocksPort     int    // SOCKS5 port (only relevant for socks mode)
+	PID           int    // Process PID
+	BlackList     string // raw -bl / --black-list value (comma-separated domains)
+	BlackListFile string // path to -bl-file / --black-list-file JSON file
 }
 
 // getRunningProfileDetails returns details (mode, socks port, PID) for each running profile.
@@ -329,6 +331,42 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 				}
 			}
 		}
+
+		// Parse -bl / --black-list and -bl-file / --black-list-file
+		fields := strings.Fields(cmdline)
+		for i, field := range fields {
+			if (field == "-bl" || field == "--bl" || field == "--black-list") && i+1 < len(fields) {
+				d.BlackList = fields[i+1]
+			}
+			if strings.HasPrefix(field, "-bl=") {
+				d.BlackList = strings.TrimPrefix(field, "-bl=")
+			}
+			if strings.HasPrefix(field, "--bl=") {
+				d.BlackList = strings.TrimPrefix(field, "--bl=")
+			}
+			if strings.HasPrefix(field, "--black-list=") {
+				d.BlackList = strings.TrimPrefix(field, "--black-list=")
+			}
+			if (field == "-bl-file" || field == "--bl-file" || field == "--black-list-file") && i+1 < len(fields) {
+				d.BlackListFile = fields[i+1]
+			}
+			if strings.HasPrefix(field, "-bl-file=") {
+				d.BlackListFile = strings.TrimPrefix(field, "-bl-file=")
+			}
+			if strings.HasPrefix(field, "--bl-file=") {
+				d.BlackListFile = strings.TrimPrefix(field, "--bl-file=")
+			}
+			if strings.HasPrefix(field, "--black-list-file=") {
+				d.BlackListFile = strings.TrimPrefix(field, "--black-list-file=")
+			}
+		}
+
+		// Prefer state file over cmdline parsing for blacklist info
+		if bl, blFile := readSplitCfg(profile); bl != "" || blFile != "" {
+			d.BlackList = bl
+			d.BlackListFile = blFile
+		}
+
 		details[profile] = d
 	}
 

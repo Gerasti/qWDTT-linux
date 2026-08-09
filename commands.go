@@ -1023,6 +1023,8 @@ func disconnectCmd() {
 		killByPgrep(targetProfile)
 	}
 
+	removeSplitCfg(targetProfile)
+
 	// Notify that the profile was disconnected
 	notifyDisconnectedSync(targetProfile)
 
@@ -1179,6 +1181,36 @@ func killByPgrep(targetProfile string) {
 	}
 }
 
+// printBlackList outputs the blacklist configuration for a running profile.
+// Reads domains from the raw -bl value and/or resolves domains from the -bl-file JSON.
+func printBlackList(d *ProfileDetails) {
+	var blDomains []string
+	if d.BlackList != "" {
+		blDomains = splitDomains(d.BlackList)
+	}
+	if d.BlackListFile != "" {
+		fileDomains, err := loadBypassRoutesFile(d.BlackListFile)
+		if err != nil {
+			fmt.Printf("  Black list file: [ERROR] %v\n", err)
+		} else {
+			blDomains = append(blDomains, fileDomains...)
+		}
+	}
+	if len(blDomains) > 0 {
+		fmt.Printf("  Black list (%d):\n", len(blDomains))
+		for i, domain := range blDomains {
+			fmt.Printf("    %-25s", domain)
+			if (i+1)%3 == 0 || i == len(blDomains)-1 {
+				fmt.Println()
+			} else {
+				fmt.Print("  ")
+			}
+		}
+	} else {
+		fmt.Printf("  Black list: (не настроен)\n")
+	}
+}
+
 func debugCmd() {
 	activeProfile := getActiveProfile()
 	if activeProfile == "" {
@@ -1255,6 +1287,7 @@ func debugCmd() {
 				} else {
 					fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
 				}
+				printBlackList(e.d)
 				fmt.Println()
 				continue
 			}
@@ -1282,6 +1315,7 @@ func debugCmd() {
 			} else {
 				fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
 			}
+			printBlackList(e.d)
 			fmt.Println()
 		}
 	} else {
@@ -1557,4 +1591,75 @@ func loadImportFromZip(path string) ([]importProfile, error) {
 	}
 
 	return allEntries, nil
+}
+
+// splitDomains разбирает CSV-строку доменов: разделяет, trim, dedup, filter пустых.
+func splitDomains(raw string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		d := strings.TrimSpace(part)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+// loadBypassRoutesFile reads a JSON file and extracts the bypassRoutes field.
+// All other fields in the JSON are ignored.
+// bypassRoutes can be either a newline-separated string or an array of strings.
+// The path may contain a leading ~ which is expanded to $HOME.
+// Returns a deduplicated list of domain/IP/CIDR strings.
+func loadBypassRoutesFile(path string) ([]string, error) {
+	expanded := os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("не удалось определить домашнюю директорию для ~ в пути %q: %w", path, err)
+		}
+		expanded = filepath.Join(home, path[1:])
+	}
+
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать файл %q: %w", expanded, err)
+	}
+
+	var raw struct {
+		BypassRoutes json.RawMessage `json:"bypassRoutes"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("не удалось распарсить JSON из %q: %w", expanded, err)
+	}
+	if len(raw.BypassRoutes) == 0 {
+		return nil, fmt.Errorf("поле bypassRoutes не найдено или пустое в файле %q", expanded)
+	}
+
+	var domains []string
+	if err := json.Unmarshal(raw.BypassRoutes, &domains); err != nil {
+		var routesStr string
+		if err2 := json.Unmarshal(raw.BypassRoutes, &routesStr); err2 != nil {
+			return nil, fmt.Errorf("поле bypassRoutes должно быть строкой или массивом строк в файле %q", expanded)
+		}
+		for _, d := range strings.Split(routesStr, "\n") {
+			if d = strings.TrimSpace(d); d != "" {
+				domains = append(domains, d)
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	var out []string
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out, nil
 }

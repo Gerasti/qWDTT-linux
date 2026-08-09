@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,4 +86,38 @@ func getAutoswitchCurrentProfile() string {
 
 func clearAutoswitchCurrentProfile() {
 	_ = os.Remove(autoswitchProfilePath())
+}
+
+func splitCfgPath(profile string) string {
+	return filepath.Join(pidFilesDir(), "qwdtt-"+profile+".bl")
+}
+
+func writeSplitCfg(profile string, bl, blFile string) error {
+	data, err := json.Marshal(struct {
+		BlackList     string `json:"black_list"`
+		BlackListFile string `json:"black_list_file"`
+	}{bl, blFile})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(splitCfgPath(profile), data, 0o644)
+}
+
+func readSplitCfg(profile string) (bl, blFile string) {
+	data, err := os.ReadFile(splitCfgPath(profile))
+	if err != nil {
+		return "", ""
+	}
+	var cfg struct {
+		BlackList     string `json:"black_list"`
+		BlackListFile string `json:"black_list_file"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", ""
+	}
+	return cfg.BlackList, cfg.BlackListFile
+}
+
+func removeSplitCfg(profile string) {
+	_ = os.Remove(splitCfgPath(profile))
 }

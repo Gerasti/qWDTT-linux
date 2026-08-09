@@ -299,7 +299,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
-						connectErr = applyWGConfig(ev.Data, turnIPs)
+						connectErr = applyWGConfig(ev.Data, turnIPs, nil)
 					}
 					if connectErr != nil {
 						fmt.Printf("  [✗] Connect (%v)\n", connectErr)
@@ -475,7 +475,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
-						connectErr = applyWGConfig(ev.Data, turnIPs)
+						connectErr = applyWGConfig(ev.Data, turnIPs, nil)
 					}
 					if connectErr != nil {
 						fmt.Printf("  [✗] Connect (%v)\n", connectErr)

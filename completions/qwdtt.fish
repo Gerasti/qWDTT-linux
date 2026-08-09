@@ -67,6 +67,10 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "tun socks"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-port -d "SOCKS5 port (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-stop -d "Stop running profile, or start if not running"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l black-list -a "bl" -d "These domains go direct"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -s bl -l bl -d "Alias for --black-list"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -r -l black-list-file -a "bl-file" -d "Read blacklist domains from JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -r -s bl-file -l bl-file -d "Alias for --black-list-file"
 
 # show, remove - all profile names
 complete -c qwdtt -n "__qwdtt_seen_command show sh remove rm share" -a "(__qwdtt_all_profiles)" -d "Profile"

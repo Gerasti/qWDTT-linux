@@ -25,7 +25,7 @@ Profile Management:
   							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
   enable <name>               Enable a profile (alias: en)
   disable <name>              Disable a profile (alias: dis)
-  import <file> [-dry-run]    Import profiles from JSON or ZIP file
+  import <file>               Import profiles from JSON or ZIP file
 
 Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
@@ -78,6 +78,10 @@ Connect Flags:
   -socks-port PORT            SOCKS5 port (default: 9050)
                                  Required with -mode socks
   -log                        Show daemon log output in terminal in real-time
+  -bl DOMAINS, --black-list   These domains go direct; everything else goes through tunnel
+                                Comma-separated, e.g. -bl vk.ru,yandex.ru
+  -bl-file PATH, --black-list-file  Read domains from JSON file (bypassRoutes field). Can combine with -bl
+                                e.g. -bl-file ~/qwdtt_bypass_sites.json
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)
@@ -103,11 +107,12 @@ Examples:
   qwdtt con disabled-profile       # can connect by explicitly specifying name
   qwdtt en myserver                # enable profile (alias for enable)
   qwdtt edit myserver -password newpass
-  qwdtt edit myserver -priority 100  # set high priority
+  qwdtt edit mysrv -priority 100   # set high priority
   qwdtt ls
-  qwdtt ls work                      # show profiles in group "work"
-  qwdtt ls -ro                       # show only read-only profiles
-  qwdtt ls -en                       # show only enabled profiles  qwdtt log autoswitch -n 20       # show last 20 log lines
+  qwdtt ls work                    # show profiles in group "work"
+  qwdtt ls -ro                     # show only read-only profiles
+  qwdtt ls -en                     # show only enabled profiles
+  qwdtt log autoswitch -n 20       # show last 20 log lines
   qwdtt log autoswitch -f          # follow log in real-time
   qwdtt sh myserver
   qwdtt test                       # test all profiles
