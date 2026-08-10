@@ -140,3 +140,49 @@ func maskPassword(pwd string) string {
 	}
 	return pwd[:3] + "****" + pwd[len(pwd)-3:]
 }
+
+// renameProfile moves a profile from oldName to newName on disk and
+// updates all dependent state: status.json (enabled/disabled),
+// active_profile, and autoswitch_current_profile.
+func renameProfile(oldName, newName string) error {
+	if strings.HasPrefix(oldName, "ro-") || strings.HasPrefix(newName, "ro-") {
+		return fmt.Errorf("cannot rename read-only profiles")
+	}
+
+	prof, err := loadProfile(oldName)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(profilePath(newName)); err == nil {
+		return fmt.Errorf("profile %q already exists", newName)
+	}
+
+	if err := saveProfile(newName, *prof); err != nil {
+		return fmt.Errorf("failed to save profile %q: %w", newName, err)
+	}
+
+	if err := os.Remove(profilePath(oldName)); err != nil {
+		_ = os.Remove(profilePath(newName))
+		return fmt.Errorf("failed to remove old profile %q: %w", oldName, err)
+	}
+
+	statuses, err := loadStatuses()
+	if err == nil {
+		if enabled, exists := statuses[oldName]; exists {
+			statuses[newName] = enabled
+			delete(statuses, oldName)
+			_ = saveStatuses(statuses)
+		}
+	}
+
+	if getActiveProfile() == oldName {
+		_ = setActiveProfile(newName)
+	}
+
+	if getAutoswitchCurrentProfile() == oldName {
+		_ = setAutoswitchCurrentProfile(newName)
+	}
+
+	return nil
+}

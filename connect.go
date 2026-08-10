@@ -724,9 +724,9 @@ func tryConnectProfile(
 						if err := applyWGConfig(ev.Data, turnIPs, splitCfg); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
-							fmt.Println("  Убедитесь, что:")
-							fmt.Println("  1. Команды ip и wg доступны")
-							fmt.Println("  2. В /etc/sudoers добавлено: your_user ALL=(ALL) NOPASSWD: /usr/bin/ip, /usr/bin/wg")
+							fmt.Println("Убедитесь, что 'getcap /run/wrappers/bin/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
+							fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
+							fmt.Println("или для NixOS 'services.qwdtt.enable = true;' с импортом модуля как в README.md")
 							c.Stop()
 							if !skipActiveProfileClear {
 								clearActiveProfile()

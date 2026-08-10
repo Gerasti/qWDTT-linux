@@ -17,8 +17,9 @@ Profile Management:
   edit <name1> [name2] ...    Edit existing profiles, same flags apply to all (alias: none)
                               -group GROUP: edit all profiles in the group
   remove <name1> [name2] ...  Remove profiles (alias: rm)
-                              -group GROUP: remove all profiles in the group
-                              -y/-yes: skip confirmation prompt
+                               -group GROUP: remove all profiles in the group
+                               -y/-yes: skip confirmation prompt
+  move <old_name> <new_name>  Rename a profile (alias: mv)
   edit/remove/show/enable/disable/test also accept glob masks, e.g. rm 'wdtt_*'
                               (quote the mask to avoid shell globbing)
   list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
@@ -57,6 +58,7 @@ Connection:
                                -mode tun|socks: connection mode (default: tun)
                                -socks-port N: SOCKS5 port (default: 9050, with -mode socks)
                                -timeout N: connection timeout in seconds (default: 10)
+                               -delay N: pause between profiles in seconds (default: 5)
 
 Device ID Management:
   device-id [id]              Show or set Device ID (alias: id)
@@ -108,9 +110,11 @@ Examples:
   qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
   qwdtt con                        # interactive profile selection
   qwdtt con myserver               # connect to profile
-  qwdtt con myserver -captcha rjs  # connect with pure Go captcha solver
+  qwdtt con myserver --toggle      # with stop if run, start if not
   qwdtt con myserver -auto-switch  # with auto-switching on failure
   qwdtt con -auto-switch -log      # start autoswitch with live log output
+  qwdtt con --mode socks           # SOCKS5 mode with default port 9050
+  qwdtt con --mode socks --socks-port 9051 # SOCKS5 with 9051 port
   qwdtt debug                      # show current connection stats
   qwdtt discon                     # disconnect active profile
   qwdtt discon myserver            # disconnect specific profile
@@ -121,7 +125,8 @@ Examples:
   qwdtt edit myserver -password newpass
   qwdtt edit myserver mysrv2 -priority 100   # edit multiple profiles at once
   qwdtt edit mysrv -priority 100   # set high priority
-  qwdtt ls
+  qwdtt edit myserver mysrv -groups work # set group myserver, mysrv to group "work"
+  qwdtt move myserver myserver-rename     # rename profile (alias: mv)
   qwdtt ls work                    # show profiles in group "work"
   qwdtt ls work personal           # show profiles in either group
   qwdtt ls -ro                     # show only read-only profiles
@@ -136,15 +141,17 @@ Examples:
   qwdtt test myserver mysrv2       # test multiple profiles
   qwdtt en -group work             # enable all profiles in group "work"
   qwdtt dis -group work            # disable all profiles in group "work"
+  qwdtt edit 'wdtt-*' -group work --groups test # move wdtt-* profiles and group "work" to group "test"
   qwdtt edit -group work -priority 100   # edit all profiles in group "work"
   qwdtt test -group work           # test all profiles in group "work"
   qwdtt show -group work           # show all profiles in group "work"
   qwdtt rm -group work             # remove all profiles in group "work"
   qwdtt log autoswitch -n 20       # show last 20 log lines
   qwdtt log autoswitch -f          # follow log in real-time
-  qwdtt sh myserver
+  qwdtt sh myserver -group work    # show settings of myserver and group "work"
   qwdtt test                       # test all profiles
-  qwdtt test myserver              # test specific profile
+  qwdtt test --mode socks --group test --delay 6 # test profile test0
+  qwdtt test myserver -group work  # test specific profile and group "work"
   qwdtt test --ro                  # test all read-only profiles
   qwdtt test --timeout 15          # set timeout to 15 seconds
   qwdtt test --enabled             # test only enabled profiles
@@ -173,6 +180,8 @@ func main() {
 		editCmd()
 	case "remove", "rm":
 		removeCmd()
+	case "move", "mv":
+		moveCmd()
 	case "list", "ls":
 		listCmd()
 	case "show", "sh":

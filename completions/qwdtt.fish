@@ -46,6 +46,7 @@ complete -c qwdtt -n __fish_use_subcommand -a disconnect -d "Disconnect from VPN
 complete -c qwdtt -n __fish_use_subcommand -a debug -d "Show debug information"
 complete -c qwdtt -n __fish_use_subcommand -a add -d "Add profile"
 complete -c qwdtt -n __fish_use_subcommand -a edit -d "Edit profile"
+complete -c qwdtt -n __fish_use_subcommand -a move -d "Rename profile"
 complete -c qwdtt -n __fish_use_subcommand -a remove -d "Remove profile"
 complete -c qwdtt -n __fish_use_subcommand -a list -d "List profiles"
 complete -c qwdtt -n __fish_use_subcommand -a show -d "Show profile"
@@ -85,6 +86,9 @@ complete -c qwdtt -n "__qwdtt_seen_command show sh share" -l group -r -a "(__qwd
 complete -c qwdtt -n "__qwdtt_seen_command remove rm" -a "(__qwdtt_all_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command remove rm" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 complete -c qwdtt -n "__qwdtt_seen_command remove rm" -s y -l y -l yes -d "Skip confirmation prompt"
+
+# move/mv - all profile names for both arguments
+complete -c qwdtt -n "__qwdtt_seen_command move mv" -a "(__qwdtt_all_profiles)" -d "Profile"
 
 # enable/en - only disabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Profile"

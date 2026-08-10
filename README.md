@@ -187,6 +187,7 @@ qwdtt disable myserver mysrv2         # отключить несколько п
 qwdtt enable myserver mysrv2          # включить несколько профилей
 qwdtt rm myserver mysrv2              # удалить несколько профилей
 qwdtt show myserver mysrv2            # показать несколько профилей
+qwdtt move myserver myserver-new      # переименовать профиль
 qwdtt share myserver        # QR-код и share-ссылка
 ```
 
@@ -200,6 +201,7 @@ qwdtt share <name>                   - Показать share-ссылку и QR
 qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
 qwdtt add <name> <wdtt://...>        - Добавить профиль
 qwdtt edit <name1> [name2] ... [флаги]  - Редактировать профили (флаги применяются ко всем)
+qwdtt move <old_name> <new_name>      - Переименовать профиль (alias: mv)
 qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
 qwdtt list [<group1> ...] [флаги]    - Список профилей, отфильтрованный по группам (alias: ls)
 qwdtt show <name1> [name2] ...       - Показать профили (alias: sh)
@@ -279,6 +281,19 @@ deb    - debug
 - `-listen ADDR` - изменить локальный UDP адрес (default: 127.0.0.1:9000)
 - `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
 - `-groups G1,G2` - установить группы профиля (через запятую, "" или "none" для очистки)
+
+## Флаги test
+
+- `-ro` - тестировать только read-only профили
+- `-en` / `-enabled` - тестировать только включённые профили
+- `-dis` / `-disabled` - тестировать только отключённые профили
+- `-group GROUP` - тестировать все профили группы
+- `-mode MODE` - режим подключения: `tun` или `socks` (default: tun)
+- `-socks-port PORT` - порт SOCKS5 (default: 9050, с `-mode socks`)
+- `-timeout N` - таймаут подключения в секундах (default: 10)
+- `-delay N` - пауза между профилями в секундах (default: 5)
+
+  Примеры: `qwdtt test --delay 2`, `qwdtt test myserver mysrv2 --delay 10`
 
 ## Auto-switch и режимы подключения
 

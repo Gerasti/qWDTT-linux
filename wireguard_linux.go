@@ -231,7 +231,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 
 	cmd := exec.Command("ip", "link", "add", wgIface, "type", "wireguard")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create wireguard interface: %w\n\nRequired capabilities:\n  ip needs cap_net_admin+eip\n\nNixOS setup:\n  security.wrappers.ip = {\n    source = \"${pkgs.iproute2}/bin/ip\";\n    capabilities = \"cap_net_admin+eip\";\n  };", err)
+		return fmt.Errorf("failed to create wireguard interface: %w\n\nRequired network capabilities:\n  sudo setcap cap_net_admin+eip qwdtt\n\nNixOS setup:\n  security.wrappers.ip = {\n    source = \"${pkgs.iproute2}/bin/ip\";\n    capabilities = \"cap_net_admin+eip\";\n  };", err)
 	}
 
 	tmpFile, err := os.CreateTemp("", "wg-*.conf")

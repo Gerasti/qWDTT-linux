@@ -39,6 +39,7 @@ func getProfilePriority(name string) int {
 func testCmd() {
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
 	timeoutSec := fs.Int("timeout", defaultTestTimeoutSec, "Connection timeout in seconds")
+	delaySec := fs.Int("delay", 5, "Pause between profiles in seconds")
 	ro := fs.Bool("ro", false, "Test only read-only profiles")
 	en := fs.Bool("en", false, "Test only enabled profiles (alias for -enabled)")
 	enabled := fs.Bool("enabled", false, "Test only enabled profiles")
@@ -156,7 +157,7 @@ func testCmd() {
 	if *mode == "socks" {
 		modeStr = fmt.Sprintf("socks (port %d)", *socksPort)
 	}
-	fmt.Printf("Тестирование %d профилей (mode: %s, timeout: %ds)\n\n", totalCount, modeStr, *timeoutSec)
+	fmt.Printf("Тестирование %d профилей (mode: %s, timeout: %ds, delay между профилями: %ds)\n\n", totalCount, modeStr, *timeoutSec, *delaySec)
 
 	var passCount, failCount int
 	currentTest := 0
@@ -179,7 +180,7 @@ func testCmd() {
 		}
 		currentTest++
 		if currentTest < totalCount {
-			time.Sleep(5 * time.Second)
+			time.Sleep(time.Duration(*delaySec) * time.Second)
 		}
 	}
 
@@ -192,7 +193,7 @@ func testCmd() {
 		}
 		currentTest++
 		if idx < len(targetProfiles)-1 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(time.Duration(*delaySec) * time.Second)
 		}
 	}
 

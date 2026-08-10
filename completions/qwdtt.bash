@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove list show share enable disable import device-id regenerate-id log test version help"
+        local commands="connect disconnect debug add edit remove move list show share enable disable import device-id regenerate-id log test version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -36,6 +36,7 @@ _qwdtt_completions() {
         sh) cmd="show" ;;
         ls) cmd="list" ;;
         rm) cmd="remove" ;;
+        mv) cmd="move" ;;
         en) cmd="enable" ;;
         dis) cmd="disable" ;;
         id) cmd="device-id" ;;
@@ -112,6 +113,12 @@ _qwdtt_completions() {
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
                  COMPREPLY=( $(compgen -W "-peer -password -hashes -device-id -listen -priority -groups -group" -- "$cur") )
+            fi
+            ;;
+        move)
+            if [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
+                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
+                COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             fi
             ;;
         add)

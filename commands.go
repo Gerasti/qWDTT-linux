@@ -297,6 +297,52 @@ func removeCmd() {
 	}
 }
 
+func moveCmd() {
+	fs := flag.NewFlagSet("move", flag.ExitOnError)
+	fs.Parse(os.Args[2:])
+	positional := fs.Args()
+
+	if len(positional) != 2 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt move <old_name> <new_name>\n")
+		os.Exit(1)
+	}
+
+	oldName := positional[0]
+	newName := positional[1]
+
+	if oldName == newName {
+		fmt.Fprintf(os.Stderr, "[ERROR] Old and new names are the same\n")
+		os.Exit(1)
+	}
+
+	if strings.HasPrefix(oldName, "ro-") || strings.HasPrefix(newName, "ro-") {
+		fmt.Fprintf(os.Stderr, "[ERROR] Cannot rename read-only profile. Read-only profiles are managed by system configuration.\n")
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(profilePath(oldName)); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Profile %q not found\n", oldName)
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(profilePath(newName)); err == nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Profile %q already exists\n", newName)
+		os.Exit(1)
+	}
+
+	if isDaemonRunning(oldName) {
+		fmt.Fprintf(os.Stderr, "[ERROR] Profile %q is currently running. Disconnect it first.\n", oldName)
+		os.Exit(1)
+	}
+
+	if err := renameProfile(oldName, newName); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Профиль '%s' переименован в '%s'\n", oldName, newName)
+}
+
 func listCmd() {
  	type profileInfo struct {
  		name      string
