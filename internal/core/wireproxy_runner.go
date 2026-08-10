@@ -3,19 +3,23 @@ package core
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/things-go/go-socks5"
+	"github.com/things-go/go-socks5/bufferpool"
 	"github.com/windtf/wireproxy"
 	"golang.zx2c4.com/wireguard/device"
 )
 
 type WireproxyRunner struct {
-	tun       *wireproxy.VirtualTun
-	cancel    context.CancelFunc
-	socksPort int
-	config    *wireproxy.Configuration
+	tun           *wireproxy.VirtualTun
+	cancel        context.CancelFunc
+	socksPort     int
+	config        *wireproxy.Configuration
+	socksListener net.Listener
 }
 
 func NewWireproxyRunner(socksPort int) *WireproxyRunner {
@@ -70,9 +74,41 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 
 	w.tun = tun
 
-	// Spawn SOCKS5 server
+	// Spawn SOCKS5 server (manually, to keep listener ref for cleanup)
 	for _, spawner := range conf.Routines {
-		go spawner.SpawnRoutine(tun)
+		if socksCfg, ok := spawner.(*wireproxy.Socks5Config); ok {
+			var authMethods []socks5.Authenticator
+			if username := socksCfg.Username; username != "" {
+				authMethods = []socks5.Authenticator{
+					socks5.UserPassAuthenticator{
+						Credentials: socks5.StaticCredentials{socksCfg.Username: socksCfg.Password},
+					},
+				}
+			} else {
+				authMethods = []socks5.Authenticator{socks5.NoAuthAuthenticator{}}
+			}
+
+			options := []socks5.Option{
+				socks5.WithDial(tun.Tnet.DialContext),
+				socks5.WithResolver(tun),
+				socks5.WithAuthMethods(authMethods),
+				socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
+			}
+
+			server := socks5.NewServer(options...)
+
+			ln, err := net.Listen("tcp", socksCfg.BindAddress)
+			if err != nil {
+				return fmt.Errorf("failed to listen on %s: %w", socksCfg.BindAddress, err)
+			}
+			w.socksListener = ln
+
+			go func() {
+				server.Serve(ln)
+			}()
+		} else {
+			go spawner.SpawnRoutine(tun)
+		}
 	}
 
 	return nil
@@ -81,6 +117,9 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 func (w *WireproxyRunner) Stop() error {
 	if w.cancel != nil {
 		w.cancel()
+	}
+	if w.socksListener != nil {
+		w.socksListener.Close()
 	}
 	if w.tun != nil && w.tun.Dev != nil {
 		w.tun.Dev.Close()

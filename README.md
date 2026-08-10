@@ -143,7 +143,7 @@ qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
 
 # Импорт профилей из JSON (например, экспорт из мобильного клиента)
 qwdtt import /path/to/profiles.json
-qwdtt import profiles.json -dry-run      # просмотр без сохранения
+qwdtt import profiles.json --dry-run      # просмотр без сохранения
 
 # Подключиться
 qwdtt con myserver
@@ -178,10 +178,15 @@ qwdtt disconnect
 # Управление
 qwdtt ls                    # список
 qwdtt ls work               # список профилей в группе "work"
+qwdtt ls work personal      # список профилей в группах "work" или "personal"
 qwdtt edit myserver -priority 100
+qwdtt edit srv1 srv2 -priority 100   # изменить приоритет нескольких профилей
 qwdtt edit myserver -groups work,personal
 qwdtt edit myserver -groups ""
-qwdtt disable myserver
+qwdtt disable myserver mysrv2         # отключить несколько профилей
+qwdtt enable myserver mysrv2          # включить несколько профилей
+qwdtt rm myserver mysrv2              # удалить несколько профилей
+qwdtt show myserver mysrv2            # показать несколько профилей
 qwdtt share myserver        # QR-код и share-ссылка
 ```
 
@@ -192,15 +197,30 @@ qwdtt connect <profile> [флаги]      - Подключиться к VPN (ali
 qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon)
 qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg)
 qwdtt share <name>                   - Показать share-ссылку и QR-код
-qwdtt debug                          - Показать debug информацию о соединении
+qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
 qwdtt add <name> <wdtt://...>        - Добавить профиль
-qwdtt edit <name> [флаги]            - Редактировать профиль
-qwdtt remove <name>                  - Удалить профиль (alias: rm)
-qwdtt list [<group>] [флаги]            - Список профилей (alias: ls)
-qwdtt show <name>                    - Показать профиль (alias: sh)
-qwdtt enable <name>                  - Включить профиль (alias: en)
-qwdtt disable <name>                 - Отключить профиль (alias: dis)
-qwdtt import <file.json> [-dry-run]  - Импортировать профили из JSON
+qwdtt edit <name1> [name2] ... [флаги]  - Редактировать профили (флаги применяются ко всем)
+qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
+qwdtt list [<group1> ...] [флаги]    - Список профилей, отфильтрованный по группам (alias: ls)
+qwdtt show <name1> [name2] ...       - Показать профили (alias: sh)
+qwdtt enable <name1> [name2] ...     - Включить профили (alias: en)
+qwdtt disable <name1> [name2] ...    - Отключить профили (alias: dis)
+
+# Управление группами: edit, remove, show, enable, disable, test поддерживают -group
+qwdtt enable -group work             - Включить все профили группы "work"
+qwdtt disable -group work            - Отключить все профили группы "work"
+qwdtt show -group work               - Показать все профили группы "work"
+qwdtt remove -group work             - Удалить все профили группы "work"
+qwdtt edit -group work -priority 100 - Изменить все профили группы "work"
+qwdtt test -group work               - Протестировать все профили группы "work"
+
+# Маски (glob): edit, remove, show, enable, disable, test принимают маски * ? [abc]
+qwdtt rm 'wdtt_*'                    - Удалить все профили, начинающиеся с wdtt_ (с подтверждением)
+qwdtt rm 'wdtt_*' -y                 - То же без подтверждения
+qwdtt test 'wdtt_*'                  - Протестировать все профили по маске
+# ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
+# (в fish ошибка "No matches for wildcard" — это ошибка шелла, решается кавычками)
+qwdtt import <file.json> [--dry-run] - Импортировать профили из JSON (--dry-run: просмотр без сохранения)
 qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
 qwdtt regenerate-id                  - Перегенерировать Device ID
 qwdtt version                        - Версия
@@ -218,12 +238,13 @@ rm     - remove
 id     - device-id
 en     - enable
 dis    - disable
+deb    - debug
 ```
 
 ## Флаги connect
 
 - `-auto-switch` - переключение между профилями при сбоях
-- `-auto-stop` - остановить запущенный профиль (или autoswitch), либо запустить если не запущен
+- `-toggle` - остановить запущенный профиль (или autoswitch), либо запустить если не запущен
 - `-workers N` - количество воркеров (кратно 9, default: 9)
 - `-mtu N` - MTU туннеля (default: 1280, max: 1500)
 - `-timeout N` - таймаут для auto-switch (default: 120)
@@ -245,9 +266,9 @@ dis    - disable
 - `-en` / `-enabled` - показать только включённые профили
 - `-dis` / `-disabled` - показать только отключённые профили
 - `-ro` - показать только read-only профили
-- `<group>` - позиционный аргумент: показать только профили в указанной группе
+- `<group1> [group2] ...` - позиционный аргумент: показать только профили из указанных групп (поддерживается несколько)
 
-  Примеры: `qwdtt ls work`, `qwdtt ls -ro`, `qwdtt ls -en work`
+  Примеры: `qwdtt ls work`, `qwdtt ls work personal`, `qwdtt ls -ro`, `qwdtt ls -en work`
 
 ## Флаги edit
 

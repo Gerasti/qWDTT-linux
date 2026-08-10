@@ -14,18 +14,27 @@ Usage:  qwdtt [OPTIONS] COMMAND
 
 Profile Management:
   add <name> <wdtt://...>     Add a new profile
-  edit <name> [flags]         Edit an existing profile
-  remove <name>               Remove a profile (alias: rm)
-  list [<group>] [flags]      Show profiles, optionally filtered (alias: ls)
+  edit <name1> [name2] ...    Edit existing profiles, same flags apply to all (alias: none)
+                              -group GROUP: edit all profiles in the group
+  remove <name1> [name2] ...  Remove profiles (alias: rm)
+                              -group GROUP: remove all profiles in the group
+                              -y/-yes: skip confirmation prompt
+  edit/remove/show/enable/disable/test also accept glob masks, e.g. rm 'wdtt_*'
+                              (quote the mask to avoid shell globbing)
+  list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
                                -en/-enabled: enabled only
                                -dis/-disabled: disabled only
                                -ro: read-only profiles only
-  show <name>                 Show profile details (alias: sh)
+  show <name1> [name2] ...    Show profile details (alias: sh)
+                              -group GROUP: show all profiles in the group
   share <name>                Show profile share link and QR code
   							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
-  enable <name>               Enable a profile (alias: en)
-  disable <name>              Disable a profile (alias: dis)
+  enable <name1> [name2] ...  Enable profiles (alias: en)
+                              -group GROUP: enable all profiles in the group
+  disable <name1> [name2] ... Disable profiles (alias: dis)
+                              -group GROUP: disable all profiles in the group
   import <file>               Import profiles from JSON or ZIP file
+                               -dry-run: show what would be imported without saving
 
 Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
@@ -35,14 +44,16 @@ Connection:
                               If profile is not specified, disconnects active profile
   log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active)
                                -n N: show last N lines; -f: follow in real-time
-  debug                       Show debug information about current connection(s)
+  debug                       Show debug information about current connection(s) (alias: deb)
                                (e.g., watch -n 1 qwdtt debug)
-  test [profile or link] [--ro] [--enabled] [--disabled]
-                               Test profile connectivity (VKAuth, Workers, Connect, InternetCheck)
-                               Without args: test all profiles
-                               -ro: test only read-only profiles
+  test [profile1 ...] [--ro] [--enabled] [--disabled] [--group GROUP]
+                                Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
+                                Without args: test all profiles
+                                Each arg can be a profile name or wdtt:// link
+                                -ro: test only read-only profiles
                                -enabled/-en: test only enabled profiles
                                -disabled/-dis: test only disabled profiles
+                               -group GROUP: test all profiles in the group
                                -mode tun|socks: connection mode (default: tun)
                                -socks-port N: SOCKS5 port (default: 9050, with -mode socks)
                                -timeout N: connection timeout in seconds (default: 10)
@@ -70,18 +81,19 @@ Connect Flags:
                                rjs  - pure Go solver only
                                wv   - external WebView solver (via CAPTCHA_SOLVE protocol)
   -auto-switch                Auto-switch to other profiles on failure
-                               (uses enabled profiles only)
+                                (uses enabled profiles only)
   -timeout N                  Timeout for -auto-switch in seconds (default: 120)
   -mode MODE                  Connection mode (default: tun)
-                               Options: tun - direct tun WireGuard
-                                        socks - local SOCKS5 proxy
+                                Options: tun - direct tun WireGuard
+                                         socks - local SOCKS5 proxy
   -socks-port PORT            SOCKS5 port (default: 9050)
-                                 Required with -mode socks
+                                  Required with -mode socks
   -log                        Show daemon log output in terminal in real-time
-  -bl DOMAINS, --black-list   These domains go direct; everything else goes through tunnel
+  -toggle                     Stop running profile, or start if not running
+  -bl DOMAINS or IP, --black-list   These domains go direct; everything else goes through tunnel
                                 Comma-separated, e.g. -bl vk.ru,yandex.ru
   -bl-file PATH, --black-list-file  Read domains from JSON file (bypassRoutes field). Can combine with -bl
-                                e.g. -bl-file ~/qwdtt_bypass_sites.json
+                                e.g. -bl-file ./qwdtt_bypass_sites.json
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)
@@ -107,11 +119,27 @@ Examples:
   qwdtt con disabled-profile       # can connect by explicitly specifying name
   qwdtt en myserver                # enable profile (alias for enable)
   qwdtt edit myserver -password newpass
+  qwdtt edit myserver mysrv2 -priority 100   # edit multiple profiles at once
   qwdtt edit mysrv -priority 100   # set high priority
   qwdtt ls
   qwdtt ls work                    # show profiles in group "work"
+  qwdtt ls work personal           # show profiles in either group
   qwdtt ls -ro                     # show only read-only profiles
   qwdtt ls -en                     # show only enabled profiles
+  qwdtt dis myserver mysrv2        # disable multiple profiles
+  qwdtt en myserver mysrv2         # enable multiple profiles
+  qwdtt rm myserver mysrv2         # remove multiple profiles
+  qwdtt rm 'wdtt_*'                # remove all profiles matching the mask (asks confirmation)
+  qwdtt rm 'wdtt_*' -y             # remove matching profiles without confirmation
+  qwdtt test 'wdtt_*'              # test all profiles matching the mask
+  qwdtt show myserver mysrv2       # show details of multiple profiles
+  qwdtt test myserver mysrv2       # test multiple profiles
+  qwdtt en -group work             # enable all profiles in group "work"
+  qwdtt dis -group work            # disable all profiles in group "work"
+  qwdtt edit -group work -priority 100   # edit all profiles in group "work"
+  qwdtt test -group work           # test all profiles in group "work"
+  qwdtt show -group work           # show all profiles in group "work"
+  qwdtt rm -group work             # remove all profiles in group "work"
   qwdtt log autoswitch -n 20       # show last 20 log lines
   qwdtt log autoswitch -f          # follow log in real-time
   qwdtt sh myserver
@@ -121,7 +149,7 @@ Examples:
   qwdtt test --timeout 15          # set timeout to 15 seconds
   qwdtt test --enabled             # test only enabled profiles
   qwdtt test --disabled            # test only disabled profiles
-  qwdtt test --mode socks          # test in SOCKS5 mode
+  qwdtt test --mode socks          # test in SOCKS5 mode without setcap and root
 `, version)
 }
 
@@ -137,7 +165,7 @@ func main() {
 		connectCmd()
 	case "disconnect", "discon":
 		disconnectCmd()
-	case "debug":
+	case "debug", "deb":
 		debugCmd()
 	case "add":
 		addCmd()

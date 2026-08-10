@@ -46,17 +46,21 @@ func testCmd() {
 	disabled := fs.Bool("disabled", false, "Test only disabled profiles")
 	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
+	group := fs.String("group", "", "Test all profiles in this group")
 
-	var profileName string
-	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
-		profileName = os.Args[2]
-		fs.Parse(os.Args[3:])
-	} else {
-		fs.Parse(os.Args[2:])
-		if profileName == "" && fs.NArg() > 0 {
-			profileName = fs.Arg(0)
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	if *group != "" {
+		members := profilesInGroup(*group)
+		if len(members) == 0 {
+			fmt.Printf("Нет профилей в группе '%s'\n", *group)
+			return
 		}
+		args = append(members, args...)
 	}
+
+	args = expandProfileMasks(args)
 
 	if *mode != "tun" && *mode != "socks" {
 		fmt.Fprintf(os.Stderr, "[ERROR] Недопустимый режим: %s (доступные: tun, socks)\n", *mode)
@@ -71,31 +75,37 @@ func testCmd() {
 		os.Exit(1)
 	}
 
+	var linkLabels []string
+	var links []WdttLink
 	var targetProfiles []string
-	if profileName != "" {
-		if strings.HasPrefix(profileName, "wdtt://") {
-			link, err := parseWdttURL(profileName)
+
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "wdtt://") {
+			link, err := parseWdttURL(arg)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[ERROR] Неверная ссылка: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[ERROR] Неверная ссылка '%s': %v\n", arg, err)
 				os.Exit(1)
 			}
-			testProfileFromLink(*link, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, profileName)
-			return
+			links = append(links, *link)
+			linkLabels = append(linkLabels, arg)
+		} else {
+			if *ro && !strings.HasPrefix(arg, "ro-") {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не является read-only\n", arg)
+				os.Exit(1)
+			}
+			if testEnabled && !isProfileEnabled(arg) {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' отключён\n", arg)
+				os.Exit(1)
+			}
+			if testDisabled && isProfileEnabled(arg) {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' включён\n", arg)
+				os.Exit(1)
+			}
+			targetProfiles = append(targetProfiles, arg)
 		}
-		if *ro && !strings.HasPrefix(profileName, "ro-") {
-			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не является read-only\n", profileName)
-			os.Exit(1)
-		}
-		if testEnabled && !isProfileEnabled(profileName) {
-			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' отключён\n", profileName)
-			os.Exit(1)
-		}
-		if testDisabled && isProfileEnabled(profileName) {
-			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' включён\n", profileName)
-			os.Exit(1)
-		}
-		targetProfiles = []string{profileName}
-	} else {
+	}
+
+	if len(args) == 0 {
 		if *ro {
 			targetProfiles = listReadOnlyProfileNames()
 		} else {
@@ -122,7 +132,7 @@ func testCmd() {
 		}
 	}
 
-	if len(targetProfiles) == 0 {
+	if len(linkLabels) == 0 && len(targetProfiles) == 0 {
 		labels := []string{}
 		if *ro {
 			labels = append(labels, "read-only")
@@ -141,14 +151,16 @@ func testCmd() {
 		return
 	}
 
+	totalCount := len(linkLabels) + len(targetProfiles)
 	modeStr := *mode
 	if *mode == "socks" {
 		modeStr = fmt.Sprintf("socks (port %d)", *socksPort)
 	}
-	fmt.Printf("Тестирование %d профилей (mode: %s, timeout: %ds)\n\n", len(targetProfiles), modeStr, *timeoutSec)
+	fmt.Printf("Тестирование %d профилей (mode: %s, timeout: %ds)\n\n", totalCount, modeStr, *timeoutSec)
 
- 	var passCount, failCount int
-	// Sort profiles by priority (highest first), then by name
+	var passCount, failCount int
+	currentTest := 0
+
 	sort.Slice(targetProfiles, func(i, j int) bool {
 		pi := getProfilePriority(targetProfiles[i])
 		pj := getProfilePriority(targetProfiles[j])
@@ -157,6 +169,20 @@ func testCmd() {
 		}
 		return targetProfiles[i] < targetProfiles[j]
 	})
+
+	for i, label := range linkLabels {
+		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, label)
+		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
+			passCount++
+		} else {
+			failCount++
+		}
+		currentTest++
+		if currentTest < totalCount {
+			time.Sleep(5 * time.Second)
+		}
+	}
+
 	for idx, name := range targetProfiles {
 		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
@@ -164,6 +190,7 @@ func testCmd() {
 		} else {
 			failCount++
 		}
+		currentTest++
 		if idx < len(targetProfiles)-1 {
 			time.Sleep(5 * time.Second)
 		}
@@ -238,10 +265,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 	cs := newCaptchaSocket(name)
 	_ = cs.Start()
 	defer cs.Stop()
-
-	stopStdinCh := make(chan struct{})
-	defer close(stopStdinCh)
-	go forwardStdinToSocket(socketPath(name), stopStdinCh)
 
 	c := core.New(cfg)
 	defer c.Stop()

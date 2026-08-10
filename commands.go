@@ -21,6 +21,43 @@ import (
 	"github.com/mdp/qrterminal"
 )
 
+// splitFlagsAndArgs separates command-line arguments into flag arguments and
+// positional arguments, handling interspersed ordering.
+// This allows flags to appear after positional args (e.g., "edit p1 p2 -flag val").
+func splitFlagsAndArgs(fs *flag.FlagSet, args []string) (flagArgs []string, positionals []string) {
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") && args[i] != "-" {
+			if strings.Contains(args[i], "=") {
+				flagArgs = append(flagArgs, args[i])
+				continue
+			}
+			name := strings.TrimLeft(args[i], "-")
+			isBool := false
+			if f := fs.Lookup(name); f != nil {
+				if bv, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bv.IsBoolFlag() {
+					isBool = true
+				}
+			}
+			if name == "h" || name == "help" {
+				isBool = true
+			}
+			if isBool {
+				flagArgs = append(flagArgs, args[i])
+			} else {
+				if i+1 < len(args) {
+					flagArgs = append(flagArgs, args[i], args[i+1])
+					i++
+				} else {
+					flagArgs = append(flagArgs, args[i])
+				}
+			}
+		} else {
+			positionals = append(positionals, args[i])
+		}
+	}
+	return flagArgs, positionals
+}
+
 func addCmd() {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	deviceID := fs.String("device-id", "", "Device ID (например, 0fd4ffcddb759420)")
@@ -77,18 +114,6 @@ func addCmd() {
 }
 
 func editCmd() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt edit <name> [флаги]\n")
-		os.Exit(1)
-	}
-
-	name := os.Args[2]
-
-	// Prevent editing read-only profiles
-	if strings.HasPrefix(name, "ro-") {
-		log.Fatalf("Cannot edit read-only profile '%s'. Read-only profiles can only be enabled/disabled.", name)
-	}
-
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	peer := fs.String("peer", "", "Адрес сервера (IP:PORT)")
 	password := fs.String("password", "", "Пароль")
@@ -97,114 +122,179 @@ func editCmd() {
 	listen := fs.String("listen", "", "Локальный адрес")
 	priority := fs.Int("priority", -1, "Приоритет (чем выше, тем раньше)")
 	groups := fs.String("groups", "", "Группы через запятую (пустая строка или none для очистки)")
-	fs.Parse(os.Args[3:])
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
 
+	names = collectTargets(*group, names)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt edit <name1> [name2] ... [флаги] [-group GROUP]\n")
+		os.Exit(1)
+	}
+
+	anyFlags := false
 	groupsChanged := false
 	fs.Visit(func(f *flag.Flag) {
+		anyFlags = true
 		if f.Name == "groups" {
 			groupsChanged = true
 		}
 	})
 
-	prof, err := loadProfile(name)
-	if err != nil {
-		log.Fatalf("Ошибка загрузки профиля: %v", err)
-	}
-
-	changed := false
-
-	if *peer != "" {
-		prof.PeerAddr = *peer
-		changed = true
-		fmt.Printf("[*] Peer изменён: %s\n", *peer)
-	}
-
-	if *password != "" {
-		prof.Password = *password
-		changed = true
-		fmt.Println("[*] Пароль изменён")
-	}
-
-	if *hashes != "" {
-		prof.Hashes = nil
-		for _, h := range strings.Split(*hashes, ",") {
-			h = strings.TrimSpace(h)
-			if h != "" {
-				prof.Hashes = append(prof.Hashes, h)
-			}
-		}
-		changed = true
-		fmt.Printf("[*] Хеши изменены (%d шт.)\n", len(prof.Hashes))
-	}
-
-	if *deviceID != "" {
-		prof.DeviceID = *deviceID
-		changed = true
-		fmt.Printf("[*] Device ID изменён: %s\n", *deviceID)
-	}
-
-	if *listen != "" {
-		prof.Listen = *listen
-		changed = true
-		fmt.Printf("[*] Listen изменён: %s\n", *listen)
-	}
-
-	if *priority != -1 {
-		prof.Priority = *priority
-		changed = true
-		fmt.Printf("[*] Приоритет изменён: %d\n", *priority)
-	}
-
-	if groupsChanged {
-		val := strings.TrimSpace(*groups)
-		if val == "" || val == "none" {
-			prof.Groups = nil
-			changed = true
-			fmt.Println("[*] Группы очищены")
-		} else {
-			prof.Groups = nil
-			for _, g := range strings.Split(val, ",") {
-				g = strings.TrimSpace(g)
-				if g != "" && g != "none" {
-					prof.Groups = append(prof.Groups, g)
-				}
-			}
-			changed = true
-			fmt.Printf("[*] Группы изменены: %v\n", prof.Groups)
-		}
-	}
-
-	if !changed {
+	if !anyFlags {
 		fmt.Println("[!] Не указаны параметры для изменения")
 		fmt.Println("Используйте: -peer, -password, -hashes, -device-id, -listen, -priority или -groups")
 		os.Exit(1)
 	}
 
-	if err := saveProfile(name, *prof); err != nil {
-		log.Fatalf("Ошибка сохранения профиля: %v", err)
+	var hadErrors bool
+	for _, name := range names {
+		if strings.HasPrefix(name, "ro-") {
+			fmt.Fprintf(os.Stderr, "[ERROR] Cannot edit read-only profile '%s'. Read-only profiles can only be enabled/disabled.\n", name)
+			hadErrors = true
+			continue
+		}
+
+		prof, err := loadProfile(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
+
+		changed := false
+
+		if *peer != "" {
+			prof.PeerAddr = *peer
+			changed = true
+			fmt.Printf("[*] %s: Peer изменён: %s\n", name, *peer)
+		}
+
+		if *password != "" {
+			prof.Password = *password
+			changed = true
+			fmt.Printf("[*] %s: Пароль изменён\n", name)
+		}
+
+		if *hashes != "" {
+			prof.Hashes = nil
+			for _, h := range strings.Split(*hashes, ",") {
+				h = strings.TrimSpace(h)
+				if h != "" {
+					prof.Hashes = append(prof.Hashes, h)
+				}
+			}
+			changed = true
+			fmt.Printf("[*] %s: Хеши изменены (%d шт.)\n", name, len(prof.Hashes))
+		}
+
+		if *deviceID != "" {
+			prof.DeviceID = *deviceID
+			changed = true
+			fmt.Printf("[*] %s: Device ID изменён: %s\n", name, *deviceID)
+		}
+
+		if *listen != "" {
+			prof.Listen = *listen
+			changed = true
+			fmt.Printf("[*] %s: Listen изменён: %s\n", name, *listen)
+		}
+
+		if *priority != -1 {
+			prof.Priority = *priority
+			changed = true
+			fmt.Printf("[*] %s: Приоритет изменён: %d\n", name, *priority)
+		}
+
+		if groupsChanged {
+			val := strings.TrimSpace(*groups)
+			if val == "" || val == "none" {
+				prof.Groups = nil
+				changed = true
+				fmt.Printf("[*] %s: Группы очищены\n", name)
+			} else {
+				prof.Groups = nil
+				for _, g := range strings.Split(val, ",") {
+					g = strings.TrimSpace(g)
+					if g != "" && g != "none" {
+						prof.Groups = append(prof.Groups, g)
+					}
+				}
+				changed = true
+				fmt.Printf("[*] %s: Группы изменены: %v\n", name, prof.Groups)
+			}
+		}
+
+		if !changed {
+			fmt.Printf("[!] %s: параметры не изменены (все значения совпадают с текущими)\n", name)
+			continue
+		}
+
+		if err := saveProfile(name, *prof); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
+
+		fmt.Printf("[OK] Профиль '%s' обновлён\n", name)
 	}
 
-	fmt.Printf("[OK] Профиль '%s' обновлён\n", name)
+	if hadErrors {
+		os.Exit(1)
+	}
 }
 
 func removeCmd() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt remove <name>\n")
+	fs := flag.NewFlagSet("remove", flag.ExitOnError)
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	names = collectTargets(*group, names)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt remove <name1> [name2] ... [-group GROUP] [-y]\n")
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
-
-	// Prevent removing read-only profiles
-	if strings.HasPrefix(name, "ro-") {
-		log.Fatalf("Cannot remove read-only profile '%s'. Read-only profiles are managed by system configuration.", name)
+	if !*yes {
+		fmt.Printf("Удалить %d профилей:\n", len(names))
+		for i, name := range names {
+			fmt.Printf("  %d. %s\n", i+1, name)
+		}
+		fmt.Print("Продолжить? [y/N]: ")
+		var answer string
+		if _, err := fmt.Scanf("%s", &answer); err != nil {
+			answer = ""
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Println("[OK] Отменено")
+			return
+		}
 	}
 
-	if err := os.Remove(profilePath(name)); err != nil {
-		log.Fatalf("Ошибка удаления профиля: %v", err)
+	var hadErrors bool
+	for _, name := range names {
+		if strings.HasPrefix(name, "ro-") {
+			fmt.Fprintf(os.Stderr, "[ERROR] Cannot remove read-only profile '%s'. Read-only profiles are managed by system configuration.\n", name)
+			hadErrors = true
+			continue
+		}
+
+		if err := os.Remove(profilePath(name)); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
+
+		fmt.Printf("[OK] Профиль '%s' удалён\n", name)
 	}
 
-	fmt.Printf("[OK] Профиль '%s' удалён\n", name)
+	if hadErrors {
+		os.Exit(1)
+	}
 }
 
 func listCmd() {
@@ -315,17 +405,8 @@ func listCmd() {
 	dis := fs.Bool("dis", false, "Show only disabled profiles")
 	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
 	ro := fs.Bool("ro", false, "Show only read-only profiles")
-
-	var groupFilter string
-	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
-		groupFilter = os.Args[2]
-		fs.Parse(os.Args[3:])
-	} else {
-		fs.Parse(os.Args[2:])
-		if fs.NArg() > 0 {
-			groupFilter = fs.Arg(0)
-		}
-	}
+	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
 
 	showEnabled := *en || *enabled
 	showDisabled := *dis || *disabled
@@ -334,22 +415,24 @@ func listCmd() {
 		os.Exit(1)
 	}
 
-	// Optional group filter: qwdtt list <group_name>
-	if groupFilter != "" {
-		filterByGroup := func(src []profileInfo) []profileInfo {
+	if len(groupFilters) > 0 {
+		filterByGroups := func(src []profileInfo) []profileInfo {
 			var filtered []profileInfo
 			for _, p := range src {
 				for _, g := range p.groups {
-					if g == groupFilter {
-						filtered = append(filtered, p)
-						break
+					for _, gf := range groupFilters {
+						if g == gf {
+							filtered = append(filtered, p)
+							goto next
+						}
 					}
 				}
+			next:
 			}
 			return filtered
 		}
-		regularProfiles = filterByGroup(regularProfiles)
-		readOnlyProfiles = filterByGroup(readOnlyProfiles)
+		regularProfiles = filterByGroups(regularProfiles)
+		readOnlyProfiles = filterByGroups(readOnlyProfiles)
 	}
 
 	// Filter by enabled/disabled status
@@ -399,8 +482,8 @@ func listCmd() {
 		if len(conditions) > 0 {
 			suffix = fmt.Sprintf(" (%s)", strings.Join(conditions, ", "))
 		}
-		if groupFilter != "" {
-			fmt.Printf("Нет профилей в группе '%s'%s\n", groupFilter, suffix)
+		if len(groupFilters) > 0 {
+			fmt.Printf("Нет профилей в группе/группах '%s'%s\n", strings.Join(groupFilters, ", "), suffix)
 		} else {
 			fmt.Println("Нет сохранённых профилей" + suffix)
 		}
@@ -520,57 +603,73 @@ func listCmd() {
 }
 
 func showCmd() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt show <name>\n")
+	fs := flag.NewFlagSet("show", flag.ExitOnError)
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	names = collectTargets(*group, names)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt show <name1> [name2] ... [-group GROUP]\n")
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
-	prof, err := loadProfile(name)
-	if err != nil {
-		log.Fatalf("Ошибка загрузки профиля: %v", err)
-	}
-
-	fmt.Printf("Профиль: %s", name)
-	if strings.HasPrefix(name, "ro-") {
-		fmt.Printf(" [read-only]")
-	}
-	fmt.Println()
-	fmt.Printf("  Peer: %s\n", prof.PeerAddr)
-	fmt.Printf("  Password: %s\n", maskPassword(prof.Password))
-	fmt.Printf("  Listen: %s\n", prof.Listen)
-	if prof.TurnHost != "" {
-		fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
-	}
-	if prof.DeviceID != "" {
-		fmt.Printf("  Device ID: %s\n", prof.DeviceID)
-	}
-
-	// Get status from status.json
-	enabled := isProfileEnabled(name)
-	status := "enabled"
-	if !enabled {
-		status = "disabled"
-	}
-	fmt.Printf("  Status: %s\n", status)
-	fmt.Printf("  Priority: %d\n", prof.Priority)
-	if len(prof.Groups) > 0 {
-		fmt.Printf("  Groups: %s\n", strings.Join(prof.Groups, ", "))
-	}
-
-	// Show runtime mode (tun/socks) if the profile is currently running
-	details := getRunningProfileDetails()
-	if d, ok := details[name]; ok {
-		fmt.Printf("  Режим: %s\n", d.Mode)
-		if d.Mode == "socks" {
-			fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+	var hadErrors bool
+	for _, name := range names {
+		prof, err := loadProfile(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
 		}
-		fmt.Printf("  PID: %d\n", d.PID)
+
+		fmt.Printf("Профиль: %s", name)
+		if strings.HasPrefix(name, "ro-") {
+			fmt.Printf(" [read-only]")
+		}
+		fmt.Println()
+		fmt.Printf("  Peer: %s\n", prof.PeerAddr)
+		fmt.Printf("  Password: %s\n", maskPassword(prof.Password))
+		fmt.Printf("  Listen: %s\n", prof.Listen)
+		if prof.TurnHost != "" {
+			fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
+		}
+		if prof.DeviceID != "" {
+			fmt.Printf("  Device ID: %s\n", prof.DeviceID)
+		}
+
+		enabled := isProfileEnabled(name)
+		status := "enabled"
+		if !enabled {
+			status = "disabled"
+		}
+		fmt.Printf("  Status: %s\n", status)
+		fmt.Printf("  Priority: %d\n", prof.Priority)
+		if len(prof.Groups) > 0 {
+			fmt.Printf("  Groups: %s\n", strings.Join(prof.Groups, ", "))
+		}
+
+		details := getRunningProfileDetails()
+		if d, ok := details[name]; ok {
+			fmt.Printf("  Режим: %s\n", d.Mode)
+			if d.Mode == "socks" {
+				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+			}
+			fmt.Printf("  PID: %d\n", d.PID)
+		}
+
+		fmt.Printf("  Хеши (%d):\n", len(prof.Hashes))
+		for i, h := range prof.Hashes {
+			fmt.Printf("    %d. %s\n", i+1, h)
+		}
+
+		if name != names[len(names)-1] {
+			fmt.Println()
+		}
 	}
 
-	fmt.Printf("  Хеши (%d):\n", len(prof.Hashes))
-	for i, h := range prof.Hashes {
-		fmt.Printf("    %d. %s\n", i+1, h)
+	if hadErrors {
+		os.Exit(1)
 	}
 }
 
@@ -598,55 +697,83 @@ func regenerateIDCmd() {
 }
 
 func enableCmd() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name>\n")
+	fs := flag.NewFlagSet("enable", flag.ExitOnError)
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	names = collectTargets(*group, names)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name1> [name2] ... [-group GROUP]\n")
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
+	var hadErrors bool
+	for _, name := range names {
+		_, err := loadProfile(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
 
-	// Check if profile exists
-	_, err := loadProfile(name)
-	if err != nil {
-		log.Fatalf("Ошибка загрузки профиля: %v", err)
+		if isProfileEnabled(name) {
+			fmt.Printf("[*] %s: уже включен\n", name)
+			continue
+		}
+
+		if err := setProfileEnabled(name, true); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
+
+		fmt.Printf("[OK] %s: включен\n", name)
 	}
 
-	if isProfileEnabled(name) {
-		fmt.Printf("[*] Профиль '%s' уже включен\n", name)
-		return
+	if hadErrors {
+		os.Exit(1)
 	}
-
-	if err := setProfileEnabled(name, true); err != nil {
-		log.Fatalf("Ошибка изменения статуса: %v", err)
-	}
-
-	fmt.Printf("[OK] Профиль '%s' включен\n", name)
 }
 
 func disableCmd() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name>\n")
+	fs := flag.NewFlagSet("disable", flag.ExitOnError)
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	names = collectTargets(*group, names)
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name1> [name2] ... [-group GROUP]\n")
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
+	var hadErrors bool
+	for _, name := range names {
+		_, err := loadProfile(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
 
-	// Check if profile exists
-	_, err := loadProfile(name)
-	if err != nil {
-		log.Fatalf("Ошибка загрузки профиля: %v", err)
+		if !isProfileEnabled(name) {
+			fmt.Printf("[*] %s: уже отключен\n", name)
+			continue
+		}
+
+		if err := setProfileEnabled(name, false); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			hadErrors = true
+			continue
+		}
+
+		fmt.Printf("[OK] %s: отключен\n", name)
 	}
 
-	if !isProfileEnabled(name) {
-		fmt.Printf("[*] Профиль '%s' уже отключен\n", name)
-		return
+	if hadErrors {
+		os.Exit(1)
 	}
-
-	if err := setProfileEnabled(name, false); err != nil {
-		log.Fatalf("Ошибка изменения статуса: %v", err)
-	}
-
-	fmt.Printf("[OK] Профиль '%s' отключен\n", name)
 }
 
 func deviceIDCmd() {
@@ -765,6 +892,94 @@ func listAllProfileNames() []string {
 	readFromDir(filepath.Join(configDir(), "ro-profiles"))
 
 	return names
+}
+
+// expandProfileMasks expands glob patterns (*, ?, [abc]) against all profile names.
+// Names without glob metacharacters pass through unchanged. Matches are sorted.
+// Masks that match nothing produce a warning on stderr.
+func expandProfileMasks(names []string) []string {
+	all := listAllProfileNames()
+	var out []string
+	seen := make(map[string]bool)
+	add := func(n string) {
+		if n == "" || seen[n] {
+			return
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	for _, n := range names {
+		if strings.ContainsAny(n, "*?[") {
+			matched := false
+			for _, p := range all {
+				if ok, _ := filepath.Match(n, p); ok {
+					add(p)
+					matched = true
+				}
+			}
+			if !matched {
+				fmt.Fprintf(os.Stderr, "[!] нет профилей по маске '%s'\n", n)
+			}
+		} else {
+			add(n)
+		}
+	}
+	return out
+}
+
+// profilesInGroup returns all profile names (from both regular and ro-profiles dirs)
+// whose Groups contain the given group name. Sorted for deterministic output.
+func profilesInGroup(group string) []string {
+	var names []string
+	readFromDir := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			prof, err := loadProfile(name)
+			if err != nil {
+				continue
+			}
+			for _, g := range prof.Groups {
+				if g == group {
+					names = append(names, name)
+					break
+				}
+			}
+		}
+	}
+	readFromDir(filepath.Join(configDir(), "profiles"))
+	readFromDir(filepath.Join(configDir(), "ro-profiles"))
+	sort.Strings(names)
+	return names
+}
+
+// collectTargets merges profiles selected via -group with explicit profile names,
+// preserving order and removing duplicates.
+func collectTargets(group string, explicit []string) []string {
+	var targets []string
+	seen := make(map[string]bool)
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		targets = append(targets, name)
+	}
+	if group != "" {
+		for _, name := range profilesInGroup(group) {
+			add(name)
+		}
+	}
+	for _, name := range expandProfileMasks(explicit) {
+		add(name)
+	}
+	return targets
 }
 
 func listDisabledProfileNames() []string {
@@ -992,21 +1207,21 @@ func disconnectCmd() {
 		}
 	}
 
-	// If autoswitch daemon is running, switch to the next profile instead of killing
+	// If autoswitch daemon is running and the target is the profile autoswitch is
+	// currently using, tell autoswitch to switch to the next profile instead of
+	// killing it directly (autoswitch would just reconnect it).
 	if isDaemonRunning("autoswitch") && targetProfile != "" && targetProfile != "autoswitch" {
-		autoswitchPID, err := readPidForProfile("autoswitch")
-		if err == nil && autoswitchPID > 0 {
-			currentProfile := getAutoswitchCurrentProfile()
-			if currentProfile == targetProfile {
+		currentProfile := getAutoswitchCurrentProfile()
+		if currentProfile == targetProfile {
+			autoswitchPID, err := readPidForProfile("autoswitch")
+			if err == nil && autoswitchPID > 0 {
 				fmt.Printf("[*] Отключение текущего профиля '%s' от autoswitch (переключение на следующий)...\n", targetProfile)
-			} else {
-				fmt.Printf("[*] Сигнал переключения отправлен в autoswitch daemon (PID: %d)...\n", autoswitchPID)
+				syscall.Kill(autoswitchPID, syscall.SIGUSR1)
+				clearAutoswitchCurrentProfile()
+				notifyDisconnectedSync(targetProfile)
+				fmt.Println("[OK] Отключено")
+				return
 			}
-			syscall.Kill(autoswitchPID, syscall.SIGUSR1)
-			clearAutoswitchCurrentProfile()
-			notifyDisconnectedSync(targetProfile)
-			fmt.Println("[OK] Отключено")
-			return
 		}
 	}
 
@@ -1408,12 +1623,20 @@ type importProfile struct {
 	GroupName      string `json:"groupName"`
 }
 
+type dryRunRow struct {
+	name   string
+	peer   string
+	hashes string
+	listen string
+	groups string
+}
+
 func importCmd() {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	dryRun := fs.Bool("dry-run", false, "Показать профили без сохранения")
-	fs.Parse(os.Args[2:])
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
 
-	args := fs.Args()
 	if len(args) < 1 || args[0] == "" {
 		fmt.Fprintf(os.Stderr, "Usage: qwdtt import <file.json|file.zip> [-dry-run]\n")
 		os.Exit(1)
@@ -1433,6 +1656,7 @@ func importCmd() {
 
 	var imported, skipped int
 	var savedNames []string
+	var dryRows []dryRunRow
 
 	for _, entry := range entries {
 		name := normalizeImportName(entry.Name)
@@ -1472,8 +1696,13 @@ func importCmd() {
 		}
 
 		if *dryRun {
-			fmt.Printf("[dry-run] %s  peer=%s  hashes=%d  listen=%s  groups=%v\n",
-				finalName, prof.PeerAddr, len(prof.Hashes), prof.Listen, prof.Groups)
+			dryRows = append(dryRows, dryRunRow{
+				name:   finalName,
+				peer:   prof.PeerAddr,
+				hashes: strconv.Itoa(len(prof.Hashes)),
+				listen: prof.Listen,
+				groups: fmt.Sprintf("%v", prof.Groups),
+			})
 			savedNames = append(savedNames, finalName)
 			continue
 		}
@@ -1489,9 +1718,34 @@ func importCmd() {
 	}
 
 	if *dryRun {
+		printDryRun(dryRows)
 		fmt.Printf("\n[dry-run] %d профилей будет импортировано\n", len(savedNames))
 	} else {
 		fmt.Printf("\n[OK] Импортировано: %d профилей, пропущено: %d\n", imported, skipped)
+	}
+}
+
+func printDryRun(rows []dryRunRow) {
+	if len(rows) == 0 {
+		return
+	}
+
+	maxName, maxPeer, maxListen := 0, 0, 0
+	for _, r := range rows {
+		if len(r.name) > maxName {
+			maxName = len(r.name)
+		}
+		if len(r.peer) > maxPeer {
+			maxPeer = len(r.peer)
+		}
+		if len(r.listen) > maxListen {
+			maxListen = len(r.listen)
+		}
+	}
+
+	for _, r := range rows {
+		fmt.Printf("[dry-run] %-*s  peer=%-*s  hashes=%s  listen=%-*s  groups=%s\n",
+			maxName, r.name, maxPeer, r.peer, r.hashes, maxListen, r.listen, r.groups)
 	}
 }
 

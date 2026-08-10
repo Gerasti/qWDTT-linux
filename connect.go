@@ -95,7 +95,7 @@ func connectCmd() {
 	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
-	autoStop := fs.Bool("auto-stop", false, "Stop running profile, or start if not running")
+	autoStop := fs.Bool("toggle", false, "Stop running profile, or start if not running")
 	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Comma-separated. TUN mode only")
 	fs.StringVar(blackList, "bl", "", "Alias for --black-list")
 	blackListFile := fs.String("black-list-file", "", "Read black-list domains from JSON file (bypassRoutes field). Can combine with -bl. TUN mode only")
@@ -174,7 +174,7 @@ func connectCmd() {
 	// --- Pre-connection conflict checks (parent process) ---
 	// These checks run before daemonization so we can use notify/fmt freely.
 
-	// Handle --auto-stop: if the target profile is already running, stop it
+	// Handle --toggle: if the target profile is already running, stop it
 	// and exit (don't connect). If not running, fall through to normal connect.
 	if *autoStop {
 		if *autoSwitch && isDaemonRunning("autoswitch") {

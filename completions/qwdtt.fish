@@ -20,6 +20,11 @@ function __qwdtt_disabled_profiles
     qwdtt __complete_disabled 2>/dev/null
 end
 
+# Helper function to get group names
+function __qwdtt_groups
+    qwdtt __complete_groups 2>/dev/null
+end
+
 # Helper to check if we're completing after a specific command (including aliases)
 function __qwdtt_seen_command
     set -l cmd (commandline -opc)
@@ -66,20 +71,28 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l timeout -d "Connectio
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "tun socks"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-port -d "SOCKS5 port (only with -mode socks)"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-stop -d "Stop running profile, or start if not running"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l toggle -d "Stop running profile, or start if not running"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l black-list -a "bl" -d "These domains go direct"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -s bl -l bl -d "Alias for --black-list"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -r -l black-list-file -a "bl-file" -d "Read blacklist domains from JSON file"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -r -s bl-file -l bl-file -d "Alias for --black-list-file"
 
-# show, remove - all profile names
-complete -c qwdtt -n "__qwdtt_seen_command show sh remove rm share" -a "(__qwdtt_all_profiles)" -d "Profile"
+# show, share - all profile names and -group flag
+complete -c qwdtt -n "__qwdtt_seen_command show sh share" -a "(__qwdtt_all_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command show sh share" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 
-# enable/en - only disabled profiles
+# remove/rm - all profile names, -group flag, confirmation bypass
+complete -c qwdtt -n "__qwdtt_seen_command remove rm" -a "(__qwdtt_all_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command remove rm" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
+complete -c qwdtt -n "__qwdtt_seen_command remove rm" -s y -l y -l yes -d "Skip confirmation prompt"
+
+# enable/en - only disabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command enable en" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 
-# disable/dis - only enabled profiles
+# disable/dis - only enabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command disable dis" -a "(__qwdtt_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command disable dis" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 
 # edit - all profile names and flags
 complete -c qwdtt -n "__qwdtt_seen_command edit" -a "(__qwdtt_all_profiles)" -d "Profile"
@@ -90,6 +103,7 @@ complete -c qwdtt -n "__qwdtt_seen_command edit" -l device-id -d "Device ID"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l listen -d "Local address"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l priority -d "Profile priority"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l groups -d "Profile groups (comma-separated)"
+complete -c qwdtt -n "__qwdtt_seen_command edit" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 
 # add - flags only
 complete -c qwdtt -n "__qwdtt_seen_command add" -l device-id -d "Device ID"
@@ -114,6 +128,7 @@ complete -c qwdtt -n "__qwdtt_seen_command test" -s en -l en -d "Test only enabl
 complete -c qwdtt -n "__qwdtt_seen_command test" -s enabled -l enabled -d "Test only enabled profiles"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s dis -l dis -d "Test only disabled profiles"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s disabled -l disabled -d "Test only disabled profiles"
+complete -c qwdtt -n "__qwdtt_seen_command test" -l group -r -a "(__qwdtt_groups)" -d "Test all profiles in this group"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s timeout -l timeout -d "Connection timeout in seconds"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s mode -l mode -d "Connection mode" -a "tun socks"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-port -l socks-port -d "SOCKS5 port"
