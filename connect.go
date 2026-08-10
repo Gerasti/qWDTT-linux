@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"qwdtt/internal/core"
+
+	"github.com/vishvananda/netlink"
 )
 
 // isDaemonRunning checks if a daemon process for the given profile daemon
@@ -42,8 +43,8 @@ func isActiveProfile(profile string) bool {
 
 // isKernelInterfaceActive checks if the WireGuard tun interface (wg-qwdtt) is up.
 func isKernelInterfaceActive() bool {
-	cmd := exec.Command("ip", "link", "show", wgIface)
-	return cmd.Run() == nil
+	_, err := netlink.LinkByName(wgIface)
+	return err == nil
 }
 
 // isSocksPortInUse checks if the given SOCKS port is already in use.
@@ -725,8 +726,6 @@ func tryConnectProfile(
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
 							fmt.Println("Убедитесь, что 'getcap /run/wrappers/bin/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
-							fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
-							fmt.Println("или для NixOS 'services.qwdtt.enable = true;' с импортом модуля как в README.md")
 							c.Stop()
 							if !skipActiveProfileClear {
 								clearActiveProfile()
@@ -747,14 +746,14 @@ func tryConnectProfile(
 							}
 							return false, false
 						}
-					fmt.Println("[OK] Туннель работает корректно")
-					fmt.Println("[*] Весь трафик теперь идет через VPN")
+						fmt.Println("[OK] Туннель работает корректно")
+						fmt.Println("[*] Весь трафик теперь идет через VPN")
 
-					if splitCfg != nil {
-						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
-					}
+						if splitCfg != nil {
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+						}
 
-					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
+						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
 							if err := setAutoswitchCurrentProfile(profileName); err != nil {
 								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)

@@ -12,9 +12,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vishvananda/netlink"
+	"golang.zx2c4.com/wireguard/wgctrl"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 const wgIface = "wg-qwdtt"
@@ -163,46 +168,150 @@ func toCIDRRoute(ip string) string {
 	return ip + "/32"
 }
 
-
-// wg-quick-only fields that wg setconf doesn't understand
-var wgQuickOnlyFields = map[string]bool{
-	"address": true, "dns": true, "mtu": true,
-	"preup": true, "postup": true, "predown": true, "postdown": true,
-	"saveconfig": true,
-}
-
-// parseWGConfig extracts Address, MTU and returns a wg-setconf-compatible config
-func parseWGConfig(conf string) (addr, mtu string, wgConf string) {
-	var out strings.Builder
+// parseWGConfig extracts Address and MTU and returns a typed wgtypes.Config
+// ready to pass to wgctrl.Client.ConfigureDevice (replaces `wg setconf`).
+// wg-quick-only keys (Address/MTU/DNS/pre{up,down}/post{up,down}/SaveConfig)
+// are ignored here: Address/MTU are handled separately, the rest are not valid
+// for the kernel WireGuard netlink SET_CONFIG operation.
+func parseWGConfig(conf string) (addr, mtu string, cfg wgtypes.Config, err error) {
 	scanner := bufio.NewScanner(strings.NewReader(conf))
+	var cur *wgtypes.PeerConfig
+	section := ""
+
 	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) == 2 {
-			key := strings.ToLower(strings.TrimSpace(parts[0]))
-			val := strings.TrimSpace(parts[1])
-			switch key {
-			case "address":
-				addr = val
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(strings.Trim(line, "[]"))
+			cur = nil
+			if section == "Peer" {
+				cfg.Peers = append(cfg.Peers, wgtypes.PeerConfig{
+					ReplaceAllowedIPs: true,
+				})
+				cur = &cfg.Peers[len(cfg.Peers)-1]
+			}
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		val := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "address":
+			addr = val
+		case "mtu":
+			mtu = val
+		case "privatekey":
+			k, e := wgtypes.ParseKey(val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid PrivateKey: %w", e)
+			}
+			cfg.PrivateKey = &k
+		case "presharedkey":
+			k, e := wgtypes.ParseKey(val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid PresharedKey: %w", e)
+			}
+			if cur != nil {
+				cur.PresharedKey = &k
+			}
+		case "listenport":
+			p, e := strconv.Atoi(val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid ListenPort %q: %w", val, e)
+			}
+			port := p
+			cfg.ListenPort = &port
+		case "publickey":
+			k, e := wgtypes.ParseKey(val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid PublicKey: %w", e)
+			}
+			if cur != nil {
+				cur.PublicKey = k
+			}
+		case "allowedips":
+			if cur == nil {
 				continue
-			case "mtu":
-				mtu = val
-				continue
-			default:
-				if wgQuickOnlyFields[key] {
+			}
+			for _, s := range strings.Split(val, ",") {
+				s = strings.TrimSpace(s)
+				if s == "" {
 					continue
 				}
+				_, ipnet, e := net.ParseCIDR(s)
+				if e != nil {
+					return "", "", cfg, fmt.Errorf("wg config: invalid AllowedIPs %q: %w", s, e)
+				}
+				cur.AllowedIPs = append(cur.AllowedIPs, *ipnet)
 			}
+		case "endpoint":
+			if cur == nil {
+				continue
+			}
+			ua, e := net.ResolveUDPAddr("udp", val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid Endpoint %q: %w", val, e)
+			}
+			cur.Endpoint = ua
+		case "persistentkeepalive":
+			if cur == nil {
+				continue
+			}
+			secs, e := strconv.Atoi(val)
+			if e != nil {
+				return "", "", cfg, fmt.Errorf("wg config: invalid PersistentKeepalive %q: %w", val, e)
+			}
+			interval := time.Duration(secs) * time.Second
+			cur.PersistentKeepaliveInterval = &interval
 		}
-		out.WriteString(line + "\n")
 	}
-	wgConf = out.String()
-	return
+	if err := scanner.Err(); err != nil {
+		return "", "", cfg, fmt.Errorf("wg config: %w", err)
+	}
+	return addr, mtu, cfg, nil
+}
+
+// parseIPNet parses an address as a CIDR, or wraps a bare IP as a host route.
+// Mirrors `ip addr add <addr>` which accepts both "10.0.0.2/24" and "10.0.0.2".
+func parseIPNet(s string) (*net.IPNet, error) {
+	_, ipnet, err := net.ParseCIDR(s)
+	if err == nil {
+		// host address preserved by parseIPNet
+		return ipnet, nil
+	}
+	bare := net.ParseIP(strings.TrimSpace(s))
+	if bare == nil {
+		return nil, fmt.Errorf("invalid address %q", s)
+	}
+	mask := net.CIDRMask(32, 32)
+	if bare.To4() == nil {
+		mask = net.CIDRMask(128, 128)
+	}
+	return &net.IPNet{IP: bare, Mask: mask}, nil
+}
+
+// cidrNet parses a CIDR/host route into a *net.IPNet for route operations.
+func cidrNet(s string) *net.IPNet {
+	_, ipnet, err := net.ParseCIDR(s)
+	if err != nil {
+		// toCIDRRoute already normalized to IP/32, but be defensive.
+		return &net.IPNet{IP: net.ParseIP(s), Mask: net.CIDRMask(32, 32)}
+	}
+	return ipnet
 }
 
 func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig) error {
-	addr, mtu, cleanConfig := parseWGConfig(config)
+	addr, mtu, wg, err := parseWGConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to parse wg config: %w", err)
+	}
 
 	if addr == "" {
 		return fmt.Errorf("no Address found in config")
@@ -223,67 +332,78 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		fmt.Printf("[*] Split tunnel (blacklist): %d IP напрямую\n", len(splitIPs))
 	}
 
-	if err := exec.Command("ip", "link", "show", wgIface).Run(); err == nil {
-		if err := teardownWG(); err != nil {
-			return fmt.Errorf("failed to remove existing interface: %w", err)
+	// If the interface already exists, tear it down first.
+	if link, e := netlink.LinkByName(wgIface); e == nil && link != nil {
+		if e := teardownWG(); e != nil {
+			return fmt.Errorf("failed to remove existing interface: %w", e)
 		}
 	}
 
-	cmd := exec.Command("ip", "link", "add", wgIface, "type", "wireguard")
-	if err := cmd.Run(); err != nil {
+	// Create the wireguard interface (replaces `ip link add ... type wireguard`).
+	if err := netlink.LinkAdd(&netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: wgIface}}); err != nil {
 		return fmt.Errorf("failed to create wireguard interface: %w\n\nRequired network capabilities:\n  sudo setcap cap_net_admin+eip qwdtt\n\nNixOS setup:\n  security.wrappers.ip = {\n    source = \"${pkgs.iproute2}/bin/ip\";\n    capabilities = \"cap_net_admin+eip\";\n  };", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "wg-*.conf")
+	link, err := netlink.LinkByName(wgIface)
 	if err != nil {
 		teardownWG()
-		return fmt.Errorf("failed to create temp config: %w", err)
+		return fmt.Errorf("failed to lookup new interface: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(cleanConfig); err != nil {
-		tmpFile.Close()
+	// Apply WireGuard keys/peers via wgctrl (replaces `wg setconf`).
+	if err := configureWgDevice(&wg); err != nil {
 		teardownWG()
-		return fmt.Errorf("failed to write config: %w", err)
-	}
-	tmpFile.Close()
-
-	cmd = exec.Command("wg", "setconf", wgIface, tmpFile.Name())
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		teardownWG()
-		return fmt.Errorf("failed to apply config: %w (output: %s)", err, string(output))
+		return err
 	}
 
-	cmd = exec.Command("ip", "link", "set", wgIface, "up")
-	if err := cmd.Run(); err != nil {
+	if err := netlink.LinkSetUp(link); err != nil {
 		teardownWG()
 		return fmt.Errorf("failed to bring up interface: %w", err)
 	}
 
-	cmd = exec.Command("ip", "addr", "add", addr, "dev", wgIface)
-	if err := cmd.Run(); err != nil {
-		teardownWG()
-		return fmt.Errorf("failed to assign IP: %w", err)
+	// Assign addresses (addr may be comma-separated CIDRs or bare IPs).
+	for _, a := range strings.Split(addr, ",") {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		ipnet, e := parseIPNet(a)
+		if e != nil {
+			teardownWG()
+			return fmt.Errorf("failed to parse address %q: %w", a, e)
+		}
+		if e := netlink.AddrAdd(link, &netlink.Addr{IPNet: ipnet}); e != nil {
+			teardownWG()
+			return fmt.Errorf("failed to assign IP %s: %w", ipnet.String(), e)
+		}
 	}
 
 	if mtu != "" {
-		cmd = exec.Command("ip", "link", "set", wgIface, "mtu", mtu)
-		cmd.Run()
+		if m, e := strconv.Atoi(mtu); e == nil {
+			_ = netlink.LinkSetMTU(link, m)
+		}
 	}
 
-	gatewayCmd := exec.Command("sh", "-c", "ip route | grep default | awk '{print $3}' | head -n1")
-	gatewayOut, err := gatewayCmd.Output()
-	gateway := strings.TrimSpace(string(gatewayOut))
+	// Discover the default gateway (replaces `ip route | grep default | awk '{print $3}'`).
+	var gateway net.IP
+	if routes, e := netlink.RouteList(nil, netlink.FAMILY_ALL); e == nil {
+		for _, r := range routes {
+			if (r.Dst == nil || r.Dst.IP == nil) && r.Gw != nil {
+				gateway = r.Gw
+				break
+			}
+		}
+	}
 
-	if gateway != "" && err == nil {
+	if gateway != nil {
 		routedTurnIPs = turnIPs
 		for _, turnIP := range turnIPs {
-			if turnIP != "" {
-				cmd = exec.Command("ip", "route", "replace", turnIP, "via", gateway)
-				if err := cmd.Run(); err != nil {
-					fmt.Printf("Info: route for %s: %v\n", turnIP, err)
-				}
+			if turnIP == "" {
+				continue
+			}
+			cidr := toCIDRRoute(turnIP)
+			if e := netlink.RouteReplace(&netlink.Route{Dst: cidrNet(cidr), Gw: gateway}); e != nil {
+				fmt.Printf("Info: route for %s: %v\n", turnIP, e)
 			}
 		}
 
@@ -291,9 +411,8 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitIPs) > 0 {
 			for _, ip := range splitIPs {
 				cidr := toCIDRRoute(ip)
-				cmd = exec.Command("ip", "route", "replace", cidr, "via", gateway)
-				if err := cmd.Run(); err != nil {
-					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, err)
+				if e := netlink.RouteReplace(&netlink.Route{Dst: cidrNet(cidr), Gw: gateway}); e != nil {
+					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
 					continue
 				}
 				splitRoutes = append(splitRoutes, cidr)
@@ -303,30 +422,47 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 
 	// Полный туннель (по умолчанию)
 	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
-		cmd = exec.Command("ip", "route", "add", cidr, "dev", wgIface)
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to add route %s: %v\n", cidr, err)
+		if e := netlink.RouteAdd(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: cidrNet(cidr)}); e != nil {
+			fmt.Printf("Warning: failed to add route %s: %v\n", cidr, e)
 		}
 	}
 
 	return nil
 }
 
+// configureWgDevice pushes keys/peers to the kernel WireGuard interface,
+// replacing `wg setconf wg-qwdtt <tmpfile>`.
+func configureWgDevice(cfg *wgtypes.Config) error {
+	w, err := wgctrl.New()
+	if err != nil {
+		return fmt.Errorf("failed to init wgctrl: %w", err)
+	}
+	defer w.Close()
+	if err := w.ConfigureDevice(wgIface, *cfg); err != nil {
+		return fmt.Errorf("failed to apply config: %w", err)
+	}
+	return nil
+}
+
 func teardownWG() error {
 	for _, cidr := range splitRoutes {
-		exec.Command("ip", "route", "del", cidr).Run()
+		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
 	}
 	splitRoutes = nil
 	for _, ip := range routedTurnIPs {
-		exec.Command("ip", "route", "del", ip).Run()
+		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(toCIDRRoute(ip))})
 	}
 	routedTurnIPs = nil
-	return exec.Command("ip", "link", "del", wgIface).Run()
+	link, err := netlink.LinkByName(wgIface)
+	if err != nil {
+		return nil
+	}
+	return netlink.LinkDel(link)
 }
 
 func testWGConnectivity() error {
-	cmd := exec.Command("ip", "link", "show", wgIface)
-	if err := cmd.Run(); err != nil {
+	link, err := netlink.LinkByName(wgIface)
+	if err != nil || link == nil {
 		return fmt.Errorf("interface not found")
 	}
 
@@ -337,7 +473,7 @@ func testWGConnectivity() error {
 	}
 
 	for _, host := range testHosts {
-		cmd = exec.Command("ping", "-c", "1", "-W", "3", "-I", wgIface, host)
+		cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", wgIface, host)
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
