@@ -90,7 +90,7 @@ export PATH=$PATH:/usr/local/go/bin
 # Собрать из исходников
 git clone https://github.com/Gerasti/qWDTT-linux
 cd qWDTT-linux
-go build -o qwdtt .
+go build -trimpath -ldflags="-s -w" 
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
 # sudo mv qwdtt /usr/local/bin/
