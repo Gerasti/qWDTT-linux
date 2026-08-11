@@ -77,6 +77,55 @@ sudo nixos-rebuild switch
 
 После установки `qwdtt` доступен через `/run/wrappers/bin/qwdtt`, `qwdtt`.
 
+### Debian/Ubuntu (из release)
+
+```bash
+# Установить утилиты
+sudo apt update
+sudo apt install iputils-ping curl patchelf
+```
+
+### Arch Linux (из release)
+
+```bash
+# Установить утилиты
+sudo pacman -S iputils curl patchelf
+```
+
+### Fedora (из release)
+
+```bash
+# Установить утилиты
+sudo dnf install iputils curl patchelf
+```
+
+### Скачивание и установка бинарника из Release
+
+```bash
+# Скачать бинарник из Release
+curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v0.9.5/qwdtt
+
+# Указать правильный интерпретатор (glibc) и сделать исполняемым
+patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 qwdtt
+chmod +x qwdtt
+
+# Опционально: переместить в /usr/local/bin для доступа без полного пути
+# sudo mv qwdtt /usr/local/bin/
+
+# Установить capabilities
+sudo setcap cap_net_admin+eip qwdtt
+```
+
+### Установка автодополнения
+
+```bash
+# Bash:
+sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt
+# Fish:
+mkdir -p ~/.config/fish/completions
+cp completions/qwdtt.fish ~/.config/fish/completions/
+```
+
 ### Сборка из исходников
 
 Минимальная версия Go — **1.24**.
@@ -97,13 +146,6 @@ go build -trimpath -ldflags="-s -w"
 
 # Установить capabilities
 sudo setcap cap_net_admin+eip qwdtt
-
-# Опционально: установить автодополнение
-# Bash:
-sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt
-# Fish:
-mkdir -p ~/.config/fish/completions
-cp completions/qwdtt.fish ~/.config/fish/completions/
 ```
 
 ## Использование
