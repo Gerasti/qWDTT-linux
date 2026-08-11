@@ -64,8 +64,9 @@ in
         type = types.bool;
         default = true;
         description = ''
-          Whether to create security wrappers with capabilities for qwdtt and ip.
+          Whether to create a security wrapper with capabilities for qwdtt.
           This allows running the tools without sudo.
+          Enabled by default when services.qwdtt.enable = true;.
         '';
       };
 
@@ -179,8 +180,8 @@ in
 
     environment.systemPackages = [
       cfg.package
-      pkgs.wireguard-tools
-      pkgs.iproute2
+      pkgs.curl
+      pkgs.iputils
     ];
 
 system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) {
@@ -407,12 +408,6 @@ NIXEOF
         owner = "root";
         group = cfg.wrappers.group;
         permissions = "u+rx,g+x";
-      };
-      ip = {
-        source = "${pkgs.iproute2}/bin/ip";
-        capabilities = "cap_net_admin+eip";
-        owner = "root";
-        group = cfg.wrappers.group;
       };
     };
 

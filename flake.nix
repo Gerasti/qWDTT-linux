@@ -53,8 +53,6 @@
         default = pkgs.mkShell {
           buildInputs = with pkgs; [
             go
-            wireguard-tools
-            iproute2
           ];
         };
       });

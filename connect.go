@@ -726,6 +726,8 @@ func tryConnectProfile(
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
 							fmt.Println("Убедитесь, что 'getcap /run/wrappers/bin/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
+							fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
+							fmt.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
 							c.Stop()
 							if !skipActiveProfileClear {
 								clearActiveProfile()

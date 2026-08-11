@@ -60,17 +60,15 @@ in
 
     enableBashIntegration = true;
     enableFishIntegration = true;
-    wrappers = {
-      enable = true;  # create security wrappers with capabilities (allows running without sudo)
-      # group = "users";  # group that can execute wrapped binaries
-    };
+    # wrappers.enable = true;  # по умолчанию уже true при services.qwdtt.enable = true;
+    # wrappers.group = "users";  # группа, которая может запускать wrapped бинарники
   };
 }
 ```
 
 Модуль автоматически:
-- Установит `qwdtt`, `wireguard-tools`, `iproute2`
-- Создаст security wrappers с capabilities для работы без sudo
+- Установит `qwdtt`
+- Создаст security wrapper `qwdtt` с `cap_net_admin` для работы без sudo (`services.qwdtt.wrappers.enable = true;` включён по умолчанию при `services.qwdtt.enable = true;`)
 - Загрузит kernel module `wireguard`
 
 Примените конфигурацию:
@@ -84,7 +82,7 @@ sudo nixos-rebuild switch
 
 ```bash
 # Установить зависимости
-sudo pacman -S iproute2 wireguard-tools
+sudo pacman -S iputils curl
 
 # Скачать бинарник из Release или собрать через go build
 # https://github.com/Gerasti/qWDTT-linux/releases
@@ -112,7 +110,7 @@ cp completions/qwdtt.fish ~/.config/fish/completions/
 ```bash
 # Установить зависимости
 sudo apt update
-sudo apt install iproute2 wireguard-tools libcap2-bin
+sudo apt install iputils-ping curl libcap2-bin
 
 # Скачать бинарник из Release или собрать через go build
 # https://github.com/Gerasti/qWDTT-linux/releases
@@ -355,7 +353,7 @@ deb    - debug
 ## Требования
 
 - Linux с WireGuard kernel module
-- `iproute2`, `wireguard-tools`
+- `iputils` (ping), `curl`
 - `cap_net_admin` capabilities
 - systemd (для suspend/resume)
 - D-Bus session bus (для уведомлений)

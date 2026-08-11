@@ -307,6 +307,20 @@ func cidrNet(s string) *net.IPNet {
 	return ipnet
 }
 
+// isDefaultRoute reports whether the route is a default route (0.0.0.0/0 or
+// ::/0). netlink materialises the kernel default route either as a nil Dst or
+// as a /0 network with a non-nil IP, so both shapes must be treated as default.
+func isDefaultRoute(r *netlink.Route) bool {
+	if r == nil {
+		return false
+	}
+	if r.Dst == nil || r.Dst.IP == nil {
+		return true
+	}
+	ones, bits := r.Dst.Mask.Size()
+	return bits > 0 && ones == 0
+}
+
 func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig) error {
 	addr, mtu, wg, err := parseWGConfig(config)
 	if err != nil {
@@ -341,7 +355,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 
 	// Create the wireguard interface (replaces `ip link add ... type wireguard`).
 	if err := netlink.LinkAdd(&netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: wgIface}}); err != nil {
-		return fmt.Errorf("failed to create wireguard interface: %w\n\nRequired network capabilities:\n  sudo setcap cap_net_admin+eip qwdtt\n\nNixOS setup:\n  security.wrappers.ip = {\n    source = \"${pkgs.iproute2}/bin/ip\";\n    capabilities = \"cap_net_admin+eip\";\n  };", err)
+		return fmt.Errorf("failed to create wireguard interface: %w\n\nRequired network capabilities:\n  sudo setcap cap_net_admin+eip qwdtt\n\nNixOS setup:\n  services.qwdtt.enable = true;  # включает wrappers.enable = true; по умолчанию", err)
 	}
 
 	link, err := netlink.LinkByName(wgIface)
@@ -388,7 +402,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 	var gateway net.IP
 	if routes, e := netlink.RouteList(nil, netlink.FAMILY_ALL); e == nil {
 		for _, r := range routes {
-			if (r.Dst == nil || r.Dst.IP == nil) && r.Gw != nil {
+			if isDefaultRoute(&r) && r.Gw != nil {
 				gateway = r.Gw
 				break
 			}
