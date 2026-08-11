@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const version = "0.9.0"
+const version = "0.9.5"
 
 func printUsage() {
 	fmt.Printf(`qwdtt v%s - VPN client via VK TURN servers
@@ -43,7 +43,7 @@ Connection:
                               Disabled profiles can be used by explicitly specifying name
   disconnect [profile]        Disconnect from VPN (alias: discon)
                               If profile is not specified, disconnects active profile
-  log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active)
+  log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active) (alias: lg)
                                -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s) (alias: deb)
                                (e.g., watch -n 1 qwdtt debug)

@@ -12,7 +12,7 @@ let
 
   qwdtt-package = pkgs.buildGoModule {
     pname = "qwdtt";
-    version = "0.9.0";
+    version = "0.9.5";
 
     src = ./../..;
     vendorHash = null;
@@ -410,8 +410,6 @@ NIXEOF
         permissions = "u+rx,g+x";
       };
     };
-
-    boot.kernelModules = [ "wireguard" ];
 
     programs.bash.completion.enable = mkIf cfg.enableBashIntegration true;
 

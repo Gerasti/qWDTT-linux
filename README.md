@@ -1,4 +1,4 @@
-# qWDTT CLI v0.9.0
+# qWDTT CLI v0.9.5
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
 
@@ -7,7 +7,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - Kernel WireGuard без sudo (capabilities)
 - Управление профилями с приоритетами
 - Auto-switch - переключение между профилями при сбоях
-- SOCKS5 режим (без root, через wireproxy)
+- SOCKS5 режим (без root, через gVisor; несколько socks с разными портами)
 - Автоматическое переподключение после suspend/resume
 - Read-only профили через NixOS конфигурацию (с поддержкой sops-nix)
 - DNS resolvers: Yandex, Cloudflare, Google (UDP и DoH)
@@ -20,7 +20,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 
 ### NixOS Module
 
-Автоматически настраивает capabilities и kernel module
+Автоматически настраивает capabilities
 
 **Пример конфигурации (`/etc/nixos/qwdtt-cli.nix`):**
 
@@ -54,13 +54,13 @@ in
       };
       pc0 = {
         link = config.sops.secrets.pc0.path;
-        deviceId = config.sops.secrets.pc0.path;
+        deviceId = config.sops.secrets.pc0.path; # particular Id for profile
       };
     };
 
     enableBashIntegration = true;
     enableFishIntegration = true;
-    # wrappers.enable = true;  # по умолчанию уже true при services.qwdtt.enable = true;
+    # wrappers.enable = true;  # по умолчанию уже true
     # wrappers.group = "users";  # группа, которая может запускать wrapped бинарники
   };
 }
@@ -68,8 +68,7 @@ in
 
 Модуль автоматически:
 - Установит `qwdtt`
-- Создаст security wrapper `qwdtt` с `cap_net_admin` для работы без sudo (`services.qwdtt.wrappers.enable = true;` включён по умолчанию при `services.qwdtt.enable = true;`)
-- Загрузит kernel module `wireguard`
+- Создаст security wrapper `qwdtt` с `cap_net_admin` для работы без sudo (`services.qwdtt.wrappers.enable = true;`)
 
 Примените конфигурацию:
 ```bash
@@ -78,46 +77,20 @@ sudo nixos-rebuild switch
 
 После установки `qwdtt` доступен через `/run/wrappers/bin/qwdtt`, `qwdtt`.
 
-### Arch Linux
+### Сборка из исходников
+
+Минимальная версия Go — **1.24**.
 
 ```bash
-# Установить зависимости
-sudo pacman -S iputils curl
+# Установить Go (если ещё не установлен)
+wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin
 
-# Скачать бинарник из Release или собрать через go build
-# https://github.com/Gerasti/qWDTT-linux/releases
-# Для сборки: sudo pacman -S go
-
-# Сделать исполняемым
-chmod +x qwdtt
-
-# Опционально: переместить в /usr/local/bin для доступа без полного пути
-# sudo mv qwdtt /usr/local/bin/
-
-# Установить capabilities
-sudo setcap cap_net_admin+eip qwdtt
-
-# Опционально: установить автодополнение
-# Bash:
-sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt
-# Fish:
-mkdir -p ~/.config/fish/completions
-cp completions/qwdtt.fish ~/.config/fish/completions/
-```
-
-### Debian/Ubuntu
-
-```bash
-# Установить зависимости
-sudo apt update
-sudo apt install iputils-ping curl libcap2-bin
-
-# Скачать бинарник из Release или собрать через go build
-# https://github.com/Gerasti/qWDTT-linux/releases
-# Для сборки: sudo apt install golang-go
-
-# Сделать исполняемым
-chmod +x qwdtt
+# Собрать из исходников
+git clone https://github.com/Gerasti/qWDTT-linux
+cd qWDTT-linux
+go build -o qwdtt .
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
 # sudo mv qwdtt /usr/local/bin/
@@ -139,8 +112,9 @@ cp completions/qwdtt.fish ~/.config/fish/completions/
 # Добавить профиль
 qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
 
-# Импорт профилей из JSON (например, экспорт из мобильного клиента)
+# Импорт профилей из JSON или ZIP (например, экспорт из мобильного клиента)
 qwdtt import /path/to/profiles.json
+qwdtt import /path/to/profiles.zip
 qwdtt import profiles.json --dry-run      # просмотр без сохранения
 
 # Подключиться
@@ -220,7 +194,7 @@ qwdtt rm 'wdtt_*' -y                 - То же без подтверждени
 qwdtt test 'wdtt_*'                  - Протестировать все профили по маске
 # ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
 # (в fish ошибка "No matches for wildcard" — это ошибка шелла, решается кавычками)
-qwdtt import <file.json> [--dry-run] - Импортировать профили из JSON (--dry-run: просмотр без сохранения)
+qwdtt import <file.json|file.zip> [--dry-run] - Импортировать профили из JSON или ZIP (--dry-run: просмотр без сохранения)
 qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
 qwdtt regenerate-id                  - Перегенерировать Device ID
 qwdtt version                        - Версия
@@ -260,6 +234,10 @@ deb    - debug
   - Опции: `tun` — прямой WireGuard через kernel; `socks` — локальный SOCKS5 прокси
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
 - `-log` - выводить лог демона в терминал в реальном времени
+- `-bl` / `--black-list` - обход туннеля для указанных доменов/IP/CIDR: они идут напрямую, остальное — через туннель (только режим `tun`)
+  - Через запятую, например: `-bl vk.ru,yandex.ru`
+- `-bl-file PATH` / `--black-list-file` - прочитать домены из JSON-файла (поле `bypassRoutes`), можно комбинировать с `-bl`
+  - Пример: `-bl-file ./qwdtt_bypass_sites.json`
 
 ## Флаги list
 
@@ -352,7 +330,7 @@ deb    - debug
 
 ## Требования
 
-- Linux с WireGuard kernel module
+- Linux
 - `iputils` (ping), `curl`
 - `cap_net_admin` capabilities
 - systemd (для suspend/resume)
@@ -372,8 +350,10 @@ deb    - debug
 ├── captcha_socket.go     # Сокет для капчи
 ├── profile.go            # Работа с профилями
 ├── suspend.go            # Мониторинг suspend/resume
+├── test.go               # Команда test (VKAuth, Workers, Connect, InternetCheck)
 ├── url_parser.go         # Парсинг wdtt:// URL
-├── wireguard_linux.go    # WireGuard интеграция
+├── wireguard_linux.go    # WireGuard интеграция (netlink/wgctrl, capabilities)
+├── qwdtt_bypass_sites.json  # Пример списка доменов для обхода туннеля (-bl-file)
 ├── internal/core/        # Core библиотека (TURN, DTLS, DoH)
 ├── modules/nixos/        # NixOS module
 ├── completions/          # Bash/Fish автодополнение
