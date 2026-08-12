@@ -8,6 +8,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - Управление профилями с приоритетами
 - Auto-switch - переключение между профилями при сбоях
 - SOCKS5 режим (без root, через gVisor; несколько socks с разными портами)
+- Raw TUN/TAP режим (сырые IP-пакеты, минуя WireGuard)
 - Автоматическое переподключение после suspend/resume
 - Read-only профили через NixOS конфигурацию (с поддержкой sops-nix)
 - DNS resolvers: Yandex, Cloudflare, Google (UDP и DoH)
@@ -77,25 +78,24 @@ sudo nixos-rebuild switch
 
 После установки `qwdtt` доступен через `/run/wrappers/bin/qwdtt`, `qwdtt`.
 
-### Debian/Ubuntu (из release)
+## Зависимости установки
+
+### Debian/Ubuntu
 
 ```bash
-# Установить утилиты
 sudo apt update
 sudo apt install iputils-ping curl patchelf
 ```
 
-### Arch Linux (из release)
+### Arch Linux
 
 ```bash
-# Установить утилиты
 sudo pacman -S iputils curl patchelf
 ```
 
-### Fedora (из release)
+### Fedora
 
 ```bash
-# Установить утилиты
 sudo dnf install iputils curl patchelf
 ```
 
@@ -162,8 +162,8 @@ qwdtt import profiles.json --dry-run      # просмотр без сохран
 # Подключиться
 qwdtt con myserver
 
-# Auto-switch режим
-qwdtt con -auto-switch
+# Auto-switch режим с режимом Raw
+qwdtt con -auto-switch --mode raw
 
 # С кастомным DNS resolver
 qwdtt con myserver -dns doh-cloudflare
@@ -274,7 +274,9 @@ deb    - debug
   - Опции: `auto`, `rjs`, `wv`
 - `-mode MODE` - режим подключения (default: tun)
   - Опции: `tun` — прямой WireGuard через kernel; `socks` — локальный SOCKS5 прокси
+  - `raw` — сырой IP-режим через TUN/TAP интерфейс, лучшая оптимизация на сервере 
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
+- `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
 - `-log` - выводить лог демона в терминал в реальном времени
 - `-bl` / `--black-list` - обход туннеля для указанных доменов/IP/CIDR: они идут напрямую, остальное — через туннель (только режим `tun`)
   - Через запятую, например: `-bl vk.ru,yandex.ru`
@@ -327,6 +329,10 @@ deb    - debug
 **Режим socks:**
 - SOCKS5 прокси через gVisor (без root)
 - Несколько SOCKS5 соединений возможны одновременно с разными портами (`-socks-port PORT`)
+
+**Режим raw:**
+- Использует `netlink` для настройки маршрутов и IP-адреса
+- Флаг `-raw-port PORT` задаёт порт для обратного соединения (default: 56003)
 
 ## Управление профилями
 
@@ -395,7 +401,6 @@ deb    - debug
 ├── test.go               # Команда test (VKAuth, Workers, Connect, InternetCheck)
 ├── url_parser.go         # Парсинг wdtt:// URL
 ├── wireguard_linux.go    # WireGuard интеграция (netlink/wgctrl, capabilities)
-├── qwdtt_bypass_sites.json  # Пример списка доменов для обхода туннеля (-bl-file)
 ├── internal/core/        # Core библиотека (TURN, DTLS, DoH)
 ├── modules/nixos/        # NixOS module
 ├── completions/          # Bash/Fish автодополнение

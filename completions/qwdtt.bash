@@ -50,11 +50,11 @@ _qwdtt_completions() {
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
                 COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch -mode -socks-port -toggle -black-list -bl -black-list-file -bl-file" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch -mode -socks-port -raw-port -toggle -black-list -bl -black-list-file -bl-file" -- "$cur") )
             elif [[ $prev == "-captcha" ]]; then
                 COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
             elif [[ $prev == "-mode" ]]; then
-                COMPREPLY=( $(compgen -W "tun socks" -- "$cur") )
+                COMPREPLY=( $(compgen -W "tun socks raw" -- "$cur") )
             elif [[ $prev == "-bl" || $prev == "-black-list" ]]; then
                 COMPREPLY=( $(compgen -f -- "$cur") )
             elif [[ $prev == "-bl-file" || $prev == "-black-list-file" ]]; then

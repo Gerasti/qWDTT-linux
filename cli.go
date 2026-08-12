@@ -88,8 +88,11 @@ Connect Flags:
   -mode MODE                  Connection mode (default: tun)
                                 Options: tun - direct tun WireGuard
                                          socks - local SOCKS5 proxy
+                                         raw - raw IP without WireGuard (server -listen-raw)
   -socks-port PORT            SOCKS5 port (default: 9050)
                                   Required with -mode socks
+  -raw-port PORT              Raw mode server port (default: 56003)
+                                  Only with -mode raw
   -log                        Show daemon log output in terminal in real-time
   -toggle                     Stop running profile, or start if not running
   -bl DOMAINS or IP, --black-list   These domains go direct; everything else goes through tunnel

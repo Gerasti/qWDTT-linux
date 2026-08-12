@@ -14,6 +14,14 @@ import (
 
 const workersPerGroup = 9
 
+// allocateGateInterval — минимальный интервал между TURN Allocate по всей
+// группе: не более одной новой аллокации за тик, независимо от того, сколько
+// воркеров сейчас готовы её выполнить. Без этого на нестабильной сети
+// несколько воркеров накладываются друг на друга и вместе выжигают VK-квоту
+// (error 486) быстрее, чем должны. Тот же приём использует
+// free-turn-proxy (internal/proxy/udprelay/loop.go).
+const allocateGateInterval = 200 * time.Millisecond
+
 // WorkersPerGroup — количество воркеров в одной группе (экспортировано для orchestrator).
 const WorkersPerGroup = workersPerGroup
 
@@ -112,6 +120,13 @@ func WorkerGroup(
 		onTurnURLs(creds.TurnURLs)
 	}
 
+	// Общий rate-limit на TURN Allocate по всей группе: не более одной новой
+	// аллокации за тик, независимо от того, сколько воркеров сейчас готовы
+	// её выполнить. Без этого на нестабильной сети несколько воркеров всё
+	// равно накладываются друг на друга и вместе выжигают VK-квоту (error 486).
+	allocateTicker := time.NewTicker(allocateGateInterval)
+	defer allocateTicker.Stop()
+
 	var configRequestInFlight int32
 	var wg sync.WaitGroup
 	var credsMu sync.RWMutex
@@ -199,8 +214,8 @@ func WorkerGroup(
 				credsSnapshot.TurnURLs = cloneStringSlice(creds.TurnURLs)
 				credsMu.RUnlock()
 
-				configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
-					getConf, cc, wid, &credsSnapshot, deviceID, password, stats)
+			configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
+				getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
 
 				if getConf {
 					if configDelivered {
@@ -332,11 +347,20 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host     string
-	Port     string
-	Hashes   []string
-	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	Host    string
+	Port    string
+	Hashes  []string
+	WrapKey []byte // Password-derived WRAP key (32 bytes), nil = disabled
 	ObfsMode string // "audio" or "video" — RTP masking mode
+	// NoDTLS: пропустить DTLS и идти RTP-obfs AEAD напрямую поверх TURN relay.
+	// Требует сервер с -listen-direct. Требует useWrap (WrapKey).
+	NoDTLS bool
+	// RawMode: raw-IP без WireGuard (см. -listen-raw, handleConnRaw на сервере).
+	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
+	RawMode bool
+	// TCPTransport: соединяться с TURN-relay по TCP вместо UDP (см.
+	// dialTURNConn в session.go). Обход UDP-душения на некоторых сетях.
+	TCPTransport bool
 }
 
 // Credentials — учетные данные TURN

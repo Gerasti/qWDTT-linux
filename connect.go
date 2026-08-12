@@ -93,8 +93,9 @@ func connectCmd() {
 	timeout := fs.Int("timeout", 120, "Connection timeout in seconds (for -auto-switch)")
 	dns := fs.String("dns", "yandex", "DNS resolver (yandex|cloudflare|google|doh-yandex|doh-cloudflare|doh-google|custom:IP:PORT|doh:https://...)")
 	captcha := fs.String("captcha", "auto", "Captcha bypass mode (auto|rjs)")
-	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
+	mode := fs.String("mode", "tun", "Connection mode (tun|socks|raw)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
+	rawPort := fs.Int("raw-port", 56003, "Server raw port (only with -mode raw)")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
 	autoStop := fs.Bool("toggle", false, "Stop running profile, or start if not running")
 	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Comma-separated. TUN mode only")
@@ -127,8 +128,8 @@ func connectCmd() {
 	// --- Split tunneling validation (before daemonizing) ---
 	var splitCfg *splitTunnelConfig
 	if *blackList != "" || *blackListFile != "" {
-		if *mode != "tun" {
-			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режиме -mode tun")
+		if *mode != "tun" && *mode != "raw" {
+			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режиме -mode tun или -mode raw")
 			os.Exit(1)
 		}
 		if *blackListFile != "" {
@@ -265,6 +266,18 @@ func connectCmd() {
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
+		} else if *mode == "raw" {
+			if rawIfaceActive() {
+				activeProfile := getActiveProfile()
+				target := activeProfile
+				if target == "" {
+					target = "другой процесс"
+				}
+				msg := fmt.Sprintf("Интерфейс %s уже используется (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
 		} else if *mode == "socks" {
 			// SOCKS mode: multiple connections allowed with different ports.
 			// Do not block on tun interface (socks mode does not conflict with it),
@@ -364,7 +377,7 @@ func connectCmd() {
 		defer func() {
 			clearAutoswitchCurrentProfile()
 		}()
-	} else if *mode == "tun" {
+	} else if *mode == "tun" || *mode == "raw" {
 		if err := setActiveProfile(profileName); err != nil {
 			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
 		}
@@ -438,7 +451,7 @@ func connectCmd() {
 				success, wasResume := tryConnectProfile(
 					currentProfile,
 					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
-					*autoSwitch, *mode, *socksPort,
+					*autoSwitch, *mode, *socksPort, *rawPort,
 					sigCh, stopCh, cs.SolveChan(), sw.get(),
 					splitCfg,
 					false,        // shouldSetActive: handled in connectCmd for non-autoswitch
@@ -487,6 +500,7 @@ func tryConnectProfile(
 	autoSwitch bool,
 	mode string,
 	socksPort int,
+	rawPort int,
 	sigCh chan os.Signal,
 	stopCh chan struct{},
 	captchaCh <-chan string,
@@ -526,6 +540,8 @@ func tryConnectProfile(
 		DNS:         dnsArg,
 		Mode:        mode,
 		SocksPort:   socksPort,
+		RawMode:     mode == "raw",
+		RawPort:     strconv.Itoa(rawPort),
 	}
 
 	if hashesOverride != "" {
@@ -548,6 +564,8 @@ func tryConnectProfile(
 	fmt.Printf("  Workers: %d\n", cfg.Workers)
 	if mode == "socks" {
 		fmt.Printf("  Mode: SOCKS5 on port %d\n", socksPort)
+	} else if mode == "raw" {
+		fmt.Printf("  Mode: raw IP (no WireGuard), server raw port %d\n", rawPort)
 	}
 
 	if shouldSetActive {
@@ -574,6 +592,7 @@ func tryConnectProfile(
 
 	connected = false
 	wgConfigured := false
+	rawConfigured := false
 	wgTested := false
 	var wr *core.WireproxyRunner
 
@@ -581,6 +600,17 @@ func tryConnectProfile(
 	if autoSwitch {
 		timeout = time.NewTimer(time.Duration(timeoutSec) * time.Second)
 		defer timeout.Stop()
+	}
+
+	teardownMode := func() {
+		if wgConfigured {
+			teardownWG()
+		} else if rawConfigured {
+			teardownTunnelRoutes()
+		}
+		if wr != nil {
+			wr.Stop()
+		}
 	}
 
 	for {
@@ -597,12 +627,7 @@ func tryConnectProfile(
 			fmt.Println("[!] Таймаут подключения")
 			notifyError(profileName, "Таймаут подключения")
 			c.Stop()
-			if wgConfigured {
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
+			teardownMode()
 			if !skipActiveProfileClear {
 				clearActiveProfile()
 			}
@@ -616,21 +641,11 @@ func tryConnectProfile(
 		case <-switchProfileCh:
 			fmt.Printf("[*] Принудительное переключение с профиля '%s'...\n", profileName)
 			c.Stop()
-			if wgConfigured {
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
+			teardownMode()
 			return false, false
 		case ev, ok := <-events:
 			if !ok {
-				if wgConfigured {
-					teardownWG()
-				}
-				if wr != nil {
-					wr.Stop()
-				}
+				teardownMode()
 				if !skipActiveProfileClear {
 					notifyDisconnectedSync(profileName)
 					clearActiveProfile()
@@ -655,12 +670,7 @@ func tryConnectProfile(
 					}
 				case "disconnected":
 					fmt.Println("[*] Отключено")
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
+					teardownMode()
 					if !skipActiveProfileClear {
 						clearActiveProfile()
 					}
@@ -677,12 +687,7 @@ func tryConnectProfile(
 					notifyError(profileName, ev.Message)
 					fmt.Printf("[!] %s\n", ev.Message)
 					c.Stop()
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
+					teardownMode()
 					if !skipActiveProfileClear {
 						clearActiveProfile()
 					}
@@ -691,7 +696,55 @@ func tryConnectProfile(
 			case core.EventError:
 				fmt.Printf("[ERROR] %s\n", ev.Message)
 			case core.EventEvent:
-				if ev.Name == "wg_config" && !wgConfigured {
+				if mode == "raw" && ev.Name == "raw_conf" && !rawConfigured {
+					rawConfigured = true
+					fmt.Printf("[*] Raw конфиг получен: %s\n", ev.Data)
+
+					if gateway := defaultGateway(); gateway != nil {
+						applyTurnIPsBypass(c.GetTurnIPs(), gateway)
+					} else {
+						fmt.Printf("[WARNING] Не найден default gateway, маршруты к TURN не настроены\n")
+					}
+
+					if splitCfg != nil {
+						applyRawSplitTunnel(splitCfg)
+					}
+
+					fmt.Println("[*] Проверка работоспособности туннеля...")
+					time.Sleep(2 * time.Second)
+					if err := testRawConnectivity(); err != nil {
+						notifyError(profileName, "Туннель не работает")
+						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+						c.Stop()
+						teardownTunnelRoutes()
+						if !skipActiveProfileClear {
+							clearActiveProfile()
+						}
+						return false, false
+					}
+					fmt.Println("[OK] Туннель работает корректно")
+					fmt.Println("[*] Весь трафик теперь идет через VPN")
+
+					if splitCfg != nil {
+						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+					}
+
+					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
+					if autoSwitch {
+						if err := setAutoswitchCurrentProfile(profileName); err != nil {
+							fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
+						}
+					}
+					notifyConnected(profileName, int32(cfg.Workers))
+					wgTested = true
+
+					if timeout != nil {
+						timeout.Stop()
+					}
+				} else if mode == "raw" && ev.Name == "raw_ready" {
+					// Сообщение о готовности raw-туннеля; реальная настройка и
+					// проверка сделаны в raw_conf выше.
+				} else if ev.Name == "wg_config" && !wgConfigured {
 					wgConfigured = true
 					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
 
@@ -771,12 +824,7 @@ func tryConnectProfile(
 
 				} else if ev.Name == "workers_completed" {
 					fmt.Println("[*] All workers completed")
-					if wgConfigured {
-						teardownWG()
-					}
-					if wr != nil {
-						wr.Stop()
-					}
+					teardownMode()
 					if !skipActiveProfileClear {
 						notifyDisconnectedSync(profileName)
 						clearActiveProfile()
@@ -800,12 +848,7 @@ func tryConnectProfile(
 		case <-suspendCh:
 			fmt.Println("\n[*] Обнаружен resume, переподключение...")
 			c.Stop()
-			if wgConfigured {
-				teardownWG()
-			}
-			if wr != nil {
-				wr.Stop()
-			}
+			teardownMode()
 			if !skipActiveProfileClear {
 				notifyDisconnectedSync(profileName)
 				clearActiveProfile()

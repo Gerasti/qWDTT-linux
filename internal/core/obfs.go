@@ -7,7 +7,8 @@
 //   [RTP Header 12 bytes][ChaCha20-Poly1305 payload+tag][Padding 0-N bytes][PadLen 1 byte]
 //
 // The RTP header fields (SSRC + SeqNum + Timestamp) form the 12-byte AEAD nonce,
-// so no separate nonce prefix is needed.
+// so no separate nonce prefix is needed. The 12-byte header is the AEAD's
+// associated data.
 
 package core
 
@@ -104,12 +105,25 @@ func obfsBuildNonce(ssrc uint32, seq uint16, ts uint32) []byte {
 	return n
 }
 
+// rtpHeaderLenFull is the base 12-byte RTP header plus a one-byte-header RTP
+// extension (RFC 8285) carrying abs-send-time (3 bytes) and
+// transport-wide-cc (2 bytes), padded to a 4-byte boundary — the same shape
+// real WebRTC clients (and VK calls) send on essentially every packet.
+// rtpHeaderLenLegacy is the bare 12-byte header (no extension), for
+// compatibility with servers running before this extension was added.
+const (
+	rtpHeaderLenFull   = 24
+	rtpHeaderLenLegacy = 12
+)
+
 // ─── Wrap (encrypt + add RTP header) ───
 
 // obfsWrapPacket wraps a plaintext payload into an RTP-like packet with authenticated encryption.
 // The output looks like:
 //
 //	[V=2,P=1,X=0,CC=0 | PT | SeqNum | Timestamp | SSRC | encrypted_payload | padding | padLen]
+//
+// This client always WRITES the plain 12-byte header (X=0, no extension).
 func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]byte, error) {
 	if len(key) != wrapKeyLen {
 		return nil, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
@@ -138,12 +152,13 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	}
 	padTotal := padRand + 1 // +1 for the length byte itself
 
-	// Allocate output: 12 (header) + payload + AEAD tag + padTotal
-	outLen := 12 + len(payload) + chacha20poly1305.Overhead + padTotal
+	headerLen := rtpHeaderLenLegacy
+	outLen := headerLen + len(payload) + chacha20poly1305.Overhead + padTotal
 	out := make([]byte, outLen)
 
-	// RTP Header (12 bytes)
-	out[0] = 0x80 | 0x20 // V=2, P=1 (padding present)
+	// RTP Header (12 bytes, no extension).
+	// Byte 0 bit layout: V(2) P(1) X(1) CC(4) — masks 0xC0/0x20/0x10/0x0F.
+	out[0] = 0x80 | 0x20 // V=2, P=1 (padding present), X=0 (no extension)
 	out[1] = cfg.PayloadType & 0x7F
 	binary.BigEndian.PutUint16(out[2:4], seq)
 	binary.BigEndian.PutUint32(out[4:8], ts)
@@ -153,10 +168,10 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("obfs: cipher init: %w", err)
 	}
-	sealed := aead.Seal(out[12:12], nonce, payload, out[:12])
+	sealed := aead.Seal(out[headerLen:headerLen], nonce, payload, out[:headerLen])
 
 	// Random padding bytes
-	padStart := 12 + len(sealed)
+	padStart := headerLen + len(sealed)
 	if padRand > 0 {
 		rand.Read(out[padStart : padStart+padRand])
 	}
@@ -169,20 +184,30 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 
 // ─── Unwrap (strip RTP header + decrypt) ───
 
-// obfsUnwrapPacket strips the RTP header, removes padding, and decrypts the payload.
+// obfsUnwrapPacket strips the RTP header+extension, removes padding, and decrypts the payload.
 // Returns number of plaintext bytes written to dst.
-// Wire-compatible with older clients/servers that always set the padding bit.
+// Header length is determined by the INCOMING packet's X bit, so a single
+// client transparently talks to both old (12-byte) and new (24-byte) servers.
 func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	if len(key) != wrapKeyLen {
 		return 0, fmt.Errorf("obfs: key must be %d bytes (got %d)", wrapKeyLen, len(key))
 	}
-	if len(wire) < 13 { // 12 header + at least 1 byte
+	if len(wire) < rtpHeaderLenLegacy+1 { // minimum: bare 12-byte header + at least 1 byte
 		return 0, errors.New("obfs: packet too short")
 	}
 
 	// Validate RTP version
 	if (wire[0] >> 6) != 2 {
 		return 0, errors.New("obfs: not RTP v2")
+	}
+
+	// Header length is determined by the X bit of the INCOMING packet.
+	headerLen := rtpHeaderLenLegacy
+	if wire[0]&0x10 != 0 { // X bit
+		headerLen = rtpHeaderLenFull
+	}
+	if len(wire) < headerLen+1 {
+		return 0, errors.New("obfs: packet too short for declared extension")
 	}
 
 	// Extract RTP fields for nonce
@@ -194,13 +219,13 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	payloadEnd := len(wire)
 	if wire[0]&0x20 != 0 {
 		padLen := int(wire[len(wire)-1])
-		if padLen == 0 || padLen > payloadEnd-12 {
+		if padLen == 0 || padLen > payloadEnd-headerLen {
 			return 0, fmt.Errorf("obfs: invalid padding length %d", padLen)
 		}
 		payloadEnd -= padLen
 	}
 
-	ciphertextLen := payloadEnd - 12
+	ciphertextLen := payloadEnd - headerLen
 	if ciphertextLen <= chacha20poly1305.Overhead {
 		return 0, errors.New("obfs: no payload after stripping header/padding")
 	}
@@ -214,7 +239,7 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("obfs: cipher init: %w", err)
 	}
-	plain, err := aead.Open(dst[:0], nonce, wire[12:payloadEnd], wire[:12])
+	plain, err := aead.Open(dst[:0], nonce, wire[headerLen:payloadEnd], wire[:headerLen])
 	if err != nil {
 		return 0, fmt.Errorf("obfs: auth: %w", err)
 	}
@@ -222,12 +247,10 @@ func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	return len(plain), nil
 }
 
-// ─── Detection ───
-
 // obfsIsRTPPacket checks if a raw UDP packet looks like our obfuscated RTP.
 // Used by the server and client to reject non-obfuscated packets.
 func obfsIsRTPPacket(wire []byte) bool {
-	if len(wire) < 13 {
+	if len(wire) < rtpHeaderLenLegacy+1 {
 		return false
 	}
 	// RTP version must be 2

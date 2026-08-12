@@ -20,16 +20,17 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"qwdtt/internal/core"
 )
 
 const wgIface = "wg-qwdtt"
 
+
+
 var routedTurnIPs []string
 var splitRoutes []string
 
-// splitTunnelConfig описывает режим split tunneling для TUN-интерфейса.
-//   - "whitelist": только указанные домены идут через туннель, остальное — напрямую.
-//   - "blacklist":  всё идёт через туннель, указанные домены — напрямую.
 type splitTunnelConfig struct {
 	mode    string
 	domains []string
@@ -37,7 +38,6 @@ type splitTunnelConfig struct {
 	rawFile string
 }
 
-// splitCacheEntry кеширует резольв доменов в IP на диск.
 type splitCacheEntry struct {
 	Key     string   `json:"key"`
 	Domains []string `json:"domains"`
@@ -160,7 +160,6 @@ func resolveDomainIPs(domains []string) ([]string, error) {
 	return ips, nil
 }
 
-// toCIDRRoute converts a plain IP to a /32 CIDR, or returns CIDR strings as-is.
 func toCIDRRoute(ip string) string {
 	if strings.Contains(ip, "/") {
 		return ip
@@ -168,11 +167,6 @@ func toCIDRRoute(ip string) string {
 	return ip + "/32"
 }
 
-// parseWGConfig extracts Address and MTU and returns a typed wgtypes.Config
-// ready to pass to wgctrl.Client.ConfigureDevice (replaces `wg setconf`).
-// wg-quick-only keys (Address/MTU/DNS/pre{up,down}/post{up,down}/SaveConfig)
-// are ignored here: Address/MTU are handled separately, the rest are not valid
-// for the kernel WireGuard netlink SET_CONFIG operation.
 func parseWGConfig(conf string) (addr, mtu string, cfg wgtypes.Config, err error) {
 	scanner := bufio.NewScanner(strings.NewReader(conf))
 	var cur *wgtypes.PeerConfig
@@ -279,7 +273,6 @@ func parseWGConfig(conf string) (addr, mtu string, cfg wgtypes.Config, err error
 }
 
 // parseIPNet parses an address as a CIDR, or wraps a bare IP as a host route.
-// Mirrors `ip addr add <addr>` which accepts both "10.0.0.2/24" and "10.0.0.2".
 func parseIPNet(s string) (*net.IPNet, error) {
 	_, ipnet, err := net.ParseCIDR(s)
 	if err == nil {
@@ -331,7 +324,6 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		return fmt.Errorf("no Address found in config")
 	}
 
-	// Резолв доменов для split tunneling (кешируется на диск + in-memory)
 	var splitIPs []string
 	if splitCfg != nil && len(splitCfg.domains) > 0 {
 		ips, err := resolveDomainIPs(splitCfg.domains)
@@ -399,33 +391,16 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 	}
 
 	// Discover the default gateway (replaces `ip route | grep default | awk '{print $3}'`).
-	var gateway net.IP
-	if routes, e := netlink.RouteList(nil, netlink.FAMILY_ALL); e == nil {
-		for _, r := range routes {
-			if isDefaultRoute(&r) && r.Gw != nil {
-				gateway = r.Gw
-				break
-			}
-		}
-	}
+	gateway := defaultGateway()
 
 	if gateway != nil {
-		routedTurnIPs = turnIPs
-		for _, turnIP := range turnIPs {
-			if turnIP == "" {
-				continue
-			}
-			cidr := toCIDRRoute(turnIP)
-			if e := netlink.RouteReplace(&netlink.Route{Dst: cidrNet(cidr), Gw: gateway}); e != nil {
-				fmt.Printf("Info: route for %s: %v\n", turnIP, e)
-			}
-		}
+		applyTurnIPsBypass(turnIPs, gateway)
 
 		// Blacklist: более специфичные маршруты через прямой шлюз (обход туннеля)
 		if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitIPs) > 0 {
 			for _, ip := range splitIPs {
 				cidr := toCIDRRoute(ip)
-				if e := netlink.RouteReplace(&netlink.Route{Dst: cidrNet(cidr), Gw: gateway}); e != nil {
+				if e := routeViaGateway(cidr, gateway); e != nil {
 					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
 					continue
 				}
@@ -434,7 +409,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		}
 	}
 
-	// Полный туннель (по умолчанию)
+	// Полный туннель
 	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		if e := netlink.RouteAdd(&netlink.Route{LinkIndex: link.Attrs().Index, Dst: cidrNet(cidr)}); e != nil {
 			fmt.Printf("Warning: failed to add route %s: %v\n", cidr, e)
@@ -444,7 +419,6 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 	return nil
 }
 
-// configureWgDevice pushes keys/peers to the kernel WireGuard interface,
 // replacing `wg setconf wg-qwdtt <tmpfile>`.
 func configureWgDevice(cfg *wgtypes.Config) error {
 	w, err := wgctrl.New()
@@ -458,20 +432,112 @@ func configureWgDevice(cfg *wgtypes.Config) error {
 	return nil
 }
 
-func teardownWG() error {
-	for _, cidr := range splitRoutes {
-		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
-	}
-	splitRoutes = nil
+func teardownTunnelRoutes() {
+	clearSplitRoutes()
 	for _, ip := range routedTurnIPs {
 		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(toCIDRRoute(ip))})
 	}
 	routedTurnIPs = nil
+}
+
+func teardownWG() error {
+	teardownTunnelRoutes()
 	link, err := netlink.LinkByName(wgIface)
 	if err != nil {
 		return nil
 	}
 	return netlink.LinkDel(link)
+}
+
+func clearSplitRoutes() {
+	for _, cidr := range splitRoutes {
+		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
+	}
+	splitRoutes = nil
+}
+
+func rawIfaceActive() bool {
+	_, err := netlink.LinkByName(core.RawIfaceName)
+	return err == nil
+}
+
+func routeViaGateway(cidr string, gateway net.IP) error {
+	return netlink.RouteReplace(&netlink.Route{Dst: cidrNet(cidr), Gw: gateway})
+}
+
+func applyTurnIPsBypass(turnIPs []string, gateway net.IP) {
+	routedTurnIPs = nil
+	for _, turnIP := range turnIPs {
+		if turnIP == "" {
+			continue
+		}
+		cidr := toCIDRRoute(turnIP)
+		if e := routeViaGateway(cidr, gateway); e != nil {
+			fmt.Printf("Info: route for %s: %v\n", turnIP, e)
+		} else {
+			routedTurnIPs = append(routedTurnIPs, cidr)
+		}
+	}
+}
+
+// defaultGateway находит первый default-маршрут с gateway в таблице маршрутов.
+func defaultGateway() net.IP {
+	if routes, e := netlink.RouteList(nil, netlink.FAMILY_ALL); e == nil {
+		for _, r := range routes {
+			if isDefaultRoute(&r) && r.Gw != nil {
+				return r.Gw
+			}
+		}
+	}
+	return nil
+}
+
+func applyRawSplitTunnel(splitCfg *splitTunnelConfig) {
+	if splitCfg == nil || splitCfg.mode != "blacklist" || len(splitCfg.domains) == 0 {
+		return
+	}
+	gateway := defaultGateway()
+	if gateway == nil {
+		fmt.Printf("[WARNING] Не найден default gateway, split tunneling невозможен\n")
+		return
+	}
+	ips, err := resolveDomainIPs(splitCfg.domains)
+	if err != nil {
+		fmt.Printf("[WARNING] Не удалось резолвить домены для split tunneling: %v\n", err)
+		return
+	}
+	fmt.Printf("[*] Split tunnel (blacklist): %d IP напрямую\n", len(ips))
+	for _, ip := range ips {
+		cidr := toCIDRRoute(ip)
+		if e := routeViaGateway(cidr, gateway); e != nil {
+			fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
+			continue
+		}
+		splitRoutes = append(splitRoutes, cidr)
+	}
+}
+
+// testRawConnectivity пингует внешние хосты через raw TUN интерфейс.
+func testRawConnectivity() error {
+	link, err := netlink.LinkByName(core.RawIfaceName)
+	if err != nil || link == nil {
+		return fmt.Errorf("interface %s not found", core.RawIfaceName)
+	}
+
+	testHosts := []string{
+		"1.1.1.1",
+		"8.8.8.8",
+		"208.67.222.222",
+	}
+
+	for _, host := range testHosts {
+		cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", core.RawIfaceName, host)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no connectivity through %s", core.RawIfaceName)
 }
 
 func testWGConnectivity() error {

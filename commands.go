@@ -564,9 +564,9 @@ func listCmd() {
 			autoswitchMarker := ""
 			if isAutoswitchCurrent {
 				if p.active {
-					autoswitchMarker = colorYellow + " [autoswitch-active]" + colorReset
+					autoswitchMarker = colorYellow + " [autoswitch]" + colorReset
 				} else {
-					modeStr = " [autoswitch-active]"
+					modeStr = " [autoswitch]"
 				}
 			}
 

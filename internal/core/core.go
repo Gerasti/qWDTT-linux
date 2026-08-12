@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"time"
 )
 
-// Config — все параметры запуска (профиль + runtime).
 type Config struct {
 	PeerAddr    string
 	Password    string
@@ -28,9 +28,12 @@ type Config struct {
 	Mode        string
 	SocksPort   int
 	WGRawConfig string
+	RawMode bool
+	NoDTLS bool
+	TCPTransport bool
+	RawPort string
 }
 
-// EventType — тип события от ядра.
 type EventType string
 
 const (
@@ -44,7 +47,6 @@ const (
 // DefaultSocksPort is the default SOCKS5 port.
 const DefaultSocksPort = 9050
 
-// Event — событие от ядра к orchestrator.
 type Event struct {
 	Type EventType
 
@@ -163,6 +165,24 @@ func (c *Core) Start() (<-chan Event, error) {
 		return nil, fmt.Errorf("resolve peer: %w", err)
 	}
 
+	if c.cfg.RawMode || c.cfg.NoDTLS {
+		rawPort := c.cfg.RawPort
+		if rawPort == "" {
+			rawPort = "56003"
+		}
+		host := peer.IP.String()
+		if peer.IP.To4() == nil {
+			host = "[" + peer.IP.String() + "]"
+		}
+		rawPeer, rerr := net.ResolveUDPAddr("udp", net.JoinHostPort(host, rawPort))
+		if rerr != nil {
+			cancel()
+			return nil, fmt.Errorf("resolve raw peer: %w", rerr)
+		}
+		peer = rawPeer
+		log.Printf("[CORE] Raw/NoDTLS peer: %s", peer.String())
+	}
+
 	wrapKey, err := deriveWrapKey(c.cfg.Password)
 	if err != nil {
 		cancel()
@@ -181,28 +201,46 @@ func (c *Core) Start() (<-chan Event, error) {
 	n = (n / workersPerGroup) * workersPerGroup
 
 	tp := &TurnParams{
-		Host:    c.cfg.TurnHost,
-		Port:    c.cfg.TurnPort,
-		Hashes:  c.cfg.Hashes,
-		WrapKey: wrapKey,
+		Host:         c.cfg.TurnHost,
+		Port:         c.cfg.TurnPort,
+		Hashes:       c.cfg.Hashes,
+		WrapKey:      wrapKey,
+		ObfsMode:     "audio",
+		NoDTLS:       c.cfg.NoDTLS || c.cfg.RawMode,
+		RawMode:      c.cfg.RawMode,
+		TCPTransport: c.cfg.TCPTransport,
 	}
 
-	localConn, err := net.ListenPacket("udp", c.cfg.Listen)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("listen %s: %w", c.cfg.Listen, err)
-	}
-	if uc, ok := localConn.(*net.UDPConn); ok {
-		_ = uc.SetReadBuffer(socketBufSize)
-		_ = uc.SetWriteBuffer(socketBufSize)
-	}
+	// В raw-режиме нет UDP loopback (обычно 127.0.0.1:9000 для WireGuard)
+	var localConn net.PacketConn
+	var tunFd *os.File
+	var localPort string
 
-	localPort := ""
-	if addr, ok := localConn.LocalAddr().(*net.UDPAddr); ok {
-		localPort = strconv.Itoa(addr.Port)
-	}
-	if localPort == "" || localPort == "0" {
-		localPort = "9000"
+	if c.cfg.RawMode {
+		var errTun error
+		tunFd, errTun = createRawTUN(RawIfaceName)
+		if errTun != nil {
+			cancel()
+			return nil, fmt.Errorf("create raw tun: %w", errTun)
+		}
+		localPort = "" 
+	} else {
+		var err error
+		localConn, err = net.ListenPacket("udp", c.cfg.Listen)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("listen %s: %w", c.cfg.Listen, err)
+		}
+		if uc, ok := localConn.(*net.UDPConn); ok {
+			_ = uc.SetReadBuffer(socketBufSize)
+			_ = uc.SetWriteBuffer(socketBufSize)
+		}
+		if addr, ok := localConn.LocalAddr().(*net.UDPAddr); ok {
+			localPort = strconv.Itoa(addr.Port)
+		}
+		if localPort == "" || localPort == "0" {
+			localPort = "9000"
+		}
 	}
 
 	numGroups := n / workersPerGroup
@@ -240,31 +278,63 @@ func (c *Core) Start() (<-chan Event, error) {
 		}
 	}()
 
-	disp := NewDispatcher(ctx, localConn, stats)
+	var disp *Dispatcher
+	if c.cfg.RawMode {
+		disp = NewDispatcherPendingTUN(ctx, stats)
+		disp.AttachTUN(tunFd)
+		log.Printf("[CORE] Raw-режим: TUN %s создан, диспетчер привязан", RawIfaceName)
+	} else {
+		disp = NewDispatcher(ctx, localConn, stats)
+	}
 
-configCh := make(chan string, 1)
+	configCh := make(chan string, 1)
 
-		go func() {
-			select {
-			case rawConf, ok := <-configCh:
-				if !ok || rawConf == "" {
-					return
+	go func() {
+		select {
+		case rawConf, ok := <-configCh:
+			if !ok || rawConf == "" {
+				return
+			}
+			if strings.HasPrefix(rawConf, "RAWCONF:") {
+				// raw mode: ip|dns|mtu
+				parts := strings.Split(strings.TrimPrefix(rawConf, "RAWCONF:"), "|")
+				if len(parts) == 3 {
+					mtu, _ := strconv.Atoi(parts[2])
+					if err := setupRawTUN(RawIfaceName, parts[0], mtu); err != nil {
+						log.Printf("[CORE] Ошибка настройки raw TUN: %v", err)
+					} else {
+						log.Printf("[CORE] Raw TUN готов: ip=%s dns=%s mtu=%d", parts[0], parts[1], mtu)
+					}
+					c.emit(Event{Type: EventEvent, Name: "raw_conf", Data: fmt.Sprintf("%s|%s|%d", parts[0], parts[1], mtu)})
+					c.emit(Event{Type: EventEvent, Name: "raw_ready"})
 				}
+			} else {
 				finalConf := patchWGConfig(rawConf, c.cfg.MTU)
 				c.emit(Event{Type: EventEvent, Name: "wg_config", Data: finalConf})
-			case <-ctx.Done():
 			}
-		}()
+		case <-ctx.Done():
+		}
+	}()
 
 		c.emit(Event{Type: EventState, Status: "connecting"})
 
-go func() {
+	go func() {
 		defer close(c.events)
 		defer disp.Shutdown()
 		defer cancel()
-		defer func() {
-			_ = localConn.Close()
-		}()
+		if c.cfg.RawMode {
+			defer func() {
+				if tunFd != nil {
+					_ = tunFd.Close()
+				}
+				_ = teardownRawTUN()
+				log.Println("[CORE] Raw TUN teardown complete")
+			}()
+		} else {
+			defer func() {
+				_ = localConn.Close()
+			}()
+		}
 
 		var wg sync.WaitGroup
 		workerIDCounter := 1
@@ -332,7 +402,6 @@ func (c *Core) Resume() { atomic.StoreInt32(&c.pauseFlag, 0) }
 
 // SolveCaptcha передаёт токен капчи в ядро.
 func (c *Core) SolveCaptcha(token string) {
-	// Дренируем устаревший результат
 	select {
 	case <-c.CaptchaResultChan:
 	default:
