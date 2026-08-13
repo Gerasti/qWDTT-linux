@@ -319,7 +319,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
@@ -390,9 +390,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 	}
 	if !workersPassed {
 		fmt.Printf("  [✗] Workers: 0\n")
-	}
-	if result.InternetCheck == "n/a" && connectPassed {
-		result.InternetCheck = "n/a"
 	}
 
 	allPassed := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
@@ -495,7 +492,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()

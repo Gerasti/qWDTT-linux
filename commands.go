@@ -1474,10 +1474,6 @@ func printBlackList(d *ProfileDetails) {
 
 func debugCmd() {
 	activeProfile := getActiveProfile()
-	if activeProfile == "" {
-		fmt.Println("[!] Нет активного подключения")
-		os.Exit(1)
-	}
 
 	fmt.Printf("=== DEBUG INFO ===\n\n")
 

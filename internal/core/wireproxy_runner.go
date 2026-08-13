@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
@@ -15,15 +16,53 @@ import (
 )
 
 type WireproxyRunner struct {
-	tun           *wireproxy.VirtualTun
-	cancel        context.CancelFunc
-	socksPort     int
-	config        *wireproxy.Configuration
-	socksListener net.Listener
+	tun            *wireproxy.VirtualTun
+	cancel         context.CancelFunc
+	socksPort      int
+	config         *wireproxy.Configuration
+	socksListener  net.Listener
+	bypassDomains  []string
+	bypassIPs      []string
 }
 
-func NewWireproxyRunner(socksPort int) *WireproxyRunner {
-	return &WireproxyRunner{socksPort: socksPort}
+func NewWireproxyRunner(socksPort int, bypassDomains, bypassIPs []string) *WireproxyRunner {
+	return &WireproxyRunner{
+		socksPort:     socksPort,
+		bypassDomains: bypassDomains,
+		bypassIPs:     bypassIPs,
+	}
+}
+
+// shouldBypass returns true if the SOCKS request destination matches
+// a blacklisted domain (FQDN suffix) or a pre-resolved bypass IP.
+func shouldBypass(req *socks5.Request, domains, ips []string) bool {
+	if req == nil {
+		return false
+	}
+
+	if req.RawDestAddr != nil && req.RawDestAddr.FQDN != "" {
+		fqdn := strings.ToLower(strings.TrimSuffix(req.RawDestAddr.FQDN, "."))
+		for _, d := range domains {
+			dl := strings.ToLower(strings.TrimSpace(d))
+			if dl == "" {
+				continue
+			}
+			if fqdn == dl || strings.HasSuffix(fqdn, "."+dl) {
+				return true
+			}
+		}
+	}
+
+	if req.DestAddr != nil && len(req.DestAddr.IP) > 0 {
+		ipStr := req.DestAddr.IP.String()
+		for _, ip := range ips {
+			if ip == ipStr {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
@@ -88,11 +127,27 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 				authMethods = []socks5.Authenticator{socks5.NoAuthAuthenticator{}}
 			}
 
-			options := []socks5.Option{
-				socks5.WithDial(tun.Tnet.DialContext),
-				socks5.WithResolver(tun),
-				socks5.WithAuthMethods(authMethods),
-				socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
+			var options []socks5.Option
+			if len(w.bypassDomains) > 0 || len(w.bypassIPs) > 0 {
+				directDialer := &net.Dialer{Timeout: 30 * time.Second, Control: nil}
+				options = []socks5.Option{
+					socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, req *socks5.Request) (net.Conn, error) {
+						if shouldBypass(req, w.bypassDomains, w.bypassIPs) {
+							return directDialer.DialContext(ctx, network, addr)
+						}
+						return tun.Tnet.DialContext(ctx, network, addr)
+					}),
+					socks5.WithResolver(tun),
+					socks5.WithAuthMethods(authMethods),
+					socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
+				}
+			} else {
+				options = []socks5.Option{
+					socks5.WithDial(tun.Tnet.DialContext),
+					socks5.WithResolver(tun),
+					socks5.WithAuthMethods(authMethods),
+					socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
+				}
 			}
 
 			server := socks5.NewServer(options...)

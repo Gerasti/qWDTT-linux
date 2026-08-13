@@ -128,8 +128,8 @@ func connectCmd() {
 	// --- Split tunneling validation (before daemonizing) ---
 	var splitCfg *splitTunnelConfig
 	if *blackList != "" || *blackListFile != "" {
-		if *mode != "tun" && *mode != "raw" {
-			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режиме -mode tun или -mode raw")
+		if *mode != "tun" && *mode != "raw" && *mode != "socks" {
+			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режимах -mode tun, -mode raw или -mode socks")
 			os.Exit(1)
 		}
 		if *blackListFile != "" {
@@ -448,7 +448,7 @@ func connectCmd() {
 					}
 				}
 
-				success, wasResume := tryConnectProfile(
+				success, wasResume, fatalErr := tryConnectProfile(
 					currentProfile,
 					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
 					*autoSwitch, *mode, *socksPort, *rawPort,
@@ -459,6 +459,17 @@ func connectCmd() {
 				)
 				if success {
 					return
+				}
+
+				if fatalErr && *autoSwitch {
+					fmt.Println("[ERROR] Критическая ошибка при настройке туннеля — авто-переключение остановлено.")
+					fmt.Println("Убедитесь, что проверка 'getcap /path/to/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
+					fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
+					fmt.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
+					cleanupPidFile(daemonProfile)
+					removeSplitCfg(daemonProfile)
+					_ = teardownWG()
+					os.Exit(1)
 				}
 
 				select {
@@ -508,7 +519,7 @@ func tryConnectProfile(
 	splitCfg *splitTunnelConfig,
 	shouldSetActive bool,
 	skipActiveProfileClear bool,
-) (connected bool, wasResume bool) {
+) (connected bool, wasResume bool, fatal bool) {
 	defer removeSplitCfg(profileName)
 
 	prof, err := loadProfile(profileName)
@@ -518,7 +529,7 @@ func tryConnectProfile(
 		if !skipActiveProfileClear {
 			clearActiveProfile()
 		}
-		return false, false
+		return false, false, false
 	}
 
 	deviceID := prof.DeviceID
@@ -582,7 +593,8 @@ func tryConnectProfile(
 		if !skipActiveProfileClear {
 			clearActiveProfile()
 		}
-		return false, false
+		_ = teardownWG()
+		return false, false, autoSwitch
 	}
 
 	suspendCh := make(chan bool, 1)
@@ -631,18 +643,18 @@ func tryConnectProfile(
 			if !skipActiveProfileClear {
 				clearActiveProfile()
 			}
-			return false, false
+			return false, false, false
 		case <-stopCh:
 			if !skipActiveProfileClear {
 				notifyDisconnectedSync(profileName)
 				clearActiveProfile()
 			}
-			return false, false
+			return false, false, false
 		case <-switchProfileCh:
 			fmt.Printf("[*] Принудительное переключение с профиля '%s'...\n", profileName)
 			c.Stop()
 			teardownMode()
-			return false, false
+			return false, false, false
 		case ev, ok := <-events:
 			if !ok {
 				teardownMode()
@@ -650,7 +662,7 @@ func tryConnectProfile(
 					notifyDisconnectedSync(profileName)
 					clearActiveProfile()
 				}
-				return false, false
+				return false, false, false
 			}
 
 			switch ev.Type {
@@ -674,7 +686,7 @@ func tryConnectProfile(
 					if !skipActiveProfileClear {
 						clearActiveProfile()
 					}
-					return false, false
+					return false, false, false
 				}
 			case core.EventLog:
 				if strings.Contains(ev.Message, "Конфиг получен") {
@@ -691,7 +703,7 @@ func tryConnectProfile(
 					if !skipActiveProfileClear {
 						clearActiveProfile()
 					}
-					return false, false
+					return false, false, false
 				}
 			case core.EventError:
 				fmt.Printf("[ERROR] %s\n", ev.Message)
@@ -720,7 +732,7 @@ func tryConnectProfile(
 						if !skipActiveProfileClear {
 							clearActiveProfile()
 						}
-						return false, false
+						return false, false, autoSwitch
 					}
 					fmt.Println("[OK] Туннель работает корректно")
 					fmt.Println("[*] Весь трафик теперь идет через VPN")
@@ -749,7 +761,13 @@ func tryConnectProfile(
 					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
 
 					if mode == "socks" {
-						wr = core.NewWireproxyRunner(socksPort)
+						var bypassDomains []string
+						var bypassIPs []string
+						if splitCfg != nil && len(splitCfg.domains) > 0 {
+							bypassDomains = splitCfg.domains
+							bypassIPs, _ = resolveDomainIPs(splitCfg.domains)
+						}
+						wr = core.NewWireproxyRunner(socksPort, bypassDomains, bypassIPs)
 						if err := wr.Start(context.Background(), ev.Data); err != nil {
 							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
 							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
@@ -757,9 +775,16 @@ func tryConnectProfile(
 							if !skipActiveProfileClear {
 								clearActiveProfile()
 							}
-							return false, false
+							return false, false, false
 						}
 						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						if splitCfg != nil && len(splitCfg.domains) > 0 {
+							fmt.Printf("[*] Split tunnel (blacklist): %d доменов, %d IP напрямую\n",
+								len(splitCfg.domains), len(bypassIPs))
+						}
+						if splitCfg != nil {
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+						}
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
 							if err := setAutoswitchCurrentProfile(profileName); err != nil {
@@ -782,25 +807,26 @@ func tryConnectProfile(
 							fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
 							fmt.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
 							c.Stop()
+							teardownWG()
 							if !skipActiveProfileClear {
 								clearActiveProfile()
 							}
-							return false, false
+							return false, false, true
 						}
 						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
 
 						fmt.Println("[*] Проверка работоспособности туннеля...")
 						time.Sleep(2 * time.Second)
-						if err := testWGConnectivity(); err != nil {
-							notifyError(profileName, "Туннель не работает")
-							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
-							c.Stop()
-							teardownWG()
-							if !skipActiveProfileClear {
-								clearActiveProfile()
-							}
-							return false, false
+					if err := testWGConnectivity(); err != nil {
+						notifyError(profileName, "Туннель не работает")
+						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+						c.Stop()
+						teardownWG()
+						if !skipActiveProfileClear {
+							clearActiveProfile()
 						}
+						return false, false, autoSwitch
+					}
 						fmt.Println("[OK] Туннель работает корректно")
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
 
@@ -829,7 +855,7 @@ func tryConnectProfile(
 						notifyDisconnectedSync(profileName)
 						clearActiveProfile()
 					}
-					return false, false
+					return false, false, false
 				} else if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
@@ -853,7 +879,7 @@ func tryConnectProfile(
 				notifyDisconnectedSync(profileName)
 				clearActiveProfile()
 			}
-			return false, true
+			return false, true, false
 		}
 	}
 }

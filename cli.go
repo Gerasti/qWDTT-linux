@@ -96,9 +96,9 @@ Connect Flags:
   -log                        Show daemon log output in terminal in real-time
   -toggle                     Stop running profile, or start if not running
   -bl DOMAINS or IP, --black-list   These domains go direct; everything else goes through tunnel
-                                Comma-separated, e.g. -bl vk.ru,yandex.ru
+                                Comma-separated, e.g. -bl vk.ru,yandex.ru (tun, socks, raw modes)
   -bl-file PATH, --black-list-file  Read domains from JSON file (bypassRoutes field). Can combine with -bl
-                                e.g. -bl-file ./qwdtt_bypass_sites.json
+                                e.g. -bl-file ./qwdtt_bypass_sites.json (tun, socks, raw modes)
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)
@@ -118,6 +118,7 @@ Examples:
   qwdtt con -auto-switch -log      # start autoswitch with live log output
   qwdtt con --mode socks           # SOCKS5 mode with default port 9050
   qwdtt con --mode socks --socks-port 9051 # SOCKS5 with 9051 port
+  qwdtt con --mode raw -bl ya.ru   # Raw mode with bypass tunnel (black list) for ya.ru
   qwdtt debug                      # show current connection stats
   qwdtt discon                     # disconnect active profile
   qwdtt discon myserver            # disconnect specific profile
@@ -206,7 +207,7 @@ func main() {
 	case "test":
 		testCmd()
 	case "version", "--version":
-		fmt.Printf("qwdtt v%s\n", version)
+		fmt.Printf("qWDTT-linux v%s\n", version)
 	case "help", "-h", "--help":
 		printUsage()
 	case "__complete_enabled":

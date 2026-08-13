@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const RawIfaceName = "qwdtt-raw"
+const RawIfaceName = "raw-qwdtt"
 
 // rawNetworking хранит state, добавленный setupRawTUN, чтобы
 // teardownRawTUN мог очистить всё в обратном порядке.

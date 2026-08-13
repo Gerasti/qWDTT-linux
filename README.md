@@ -4,7 +4,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 
 ## Возможности
 
-- Kernel WireGuard без sudo (capabilities)
+- TUN/TAP без sudo (capabilities)
 - Управление профилями с приоритетами
 - Auto-switch - переключение между профилями при сбоях
 - SOCKS5 режим (без root, через gVisor; несколько socks с разными портами)
@@ -15,6 +15,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - D-Bus уведомления о подключениях и событиях
 - Live вывод лога демона (`-log` флаг и `qwdtt log` команда)
 - share <name> — показ ссылки и QR-кода для профиля
+- import <name> — импорт профилей из JSON или ZIP файлов приложения андроид
 - Debug режим для мониторинга соединения
 
 ## Установка
@@ -278,8 +279,9 @@ deb    - debug
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
 - `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
 - `-log` - выводить лог демона в терминал в реальном времени
-- `-bl` / `--black-list` - обход туннеля для указанных доменов/IP/CIDR: они идут напрямую, остальное — через туннель (только режим `tun`)
+- `-bl` / `--black-list` - обход туннеля для указанных доменов/IP/CIDR: они идут напрямую, остальное — через туннель (режимы `tun`, `raw` и `socks`)
   - Через запятую, например: `-bl vk.ru,yandex.ru`
+  - В режиме `socks` bypass работает на уровне SOCKS5-прокси: запросы к этим доменам/IP идут напрямую, не через туннель
 - `-bl-file PATH` / `--black-list-file` - прочитать домены из JSON-файла (поле `bypassRoutes`), можно комбинировать с `-bl`
   - Пример: `-bl-file ./qwdtt_bypass_sites.json`
 
