@@ -8,7 +8,7 @@ import (
 const version = "0.9.5"
 
 func printUsage() {
-	fmt.Printf(`qwdtt v%s - VPN client via VK TURN servers
+	fmt.Printf(`qWDTT-linux v%s - VPN client via VK TURN servers
 
 Usage:  qwdtt [OPTIONS] COMMAND
 

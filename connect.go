@@ -212,7 +212,7 @@ func connectCmd() {
 				}
 				clearActiveProfile()
 			}
-			notifyDisconnectedSync(daemonProfile)
+			notifyDisconnectedSync(daemonProfile, *mode)
 			fmt.Printf("[OK] Профиль '%s' остановлен\n", daemonProfile)
 			os.Exit(0)
 		}
@@ -646,7 +646,7 @@ func tryConnectProfile(
 			return false, false, false
 		case <-stopCh:
 			if !skipActiveProfileClear {
-				notifyDisconnectedSync(profileName)
+				notifyDisconnectedSync(profileName, mode)
 				clearActiveProfile()
 			}
 			return false, false, false
@@ -659,7 +659,7 @@ func tryConnectProfile(
 			if !ok {
 				teardownMode()
 				if !skipActiveProfileClear {
-					notifyDisconnectedSync(profileName)
+					notifyDisconnectedSync(profileName, mode)
 					clearActiveProfile()
 				}
 				return false, false, false
@@ -747,7 +747,7 @@ func tryConnectProfile(
 							fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
 						}
 					}
-					notifyConnected(profileName, int32(cfg.Workers))
+					notifyConnected(profileName, mode, int32(cfg.Workers))
 					wgTested = true
 
 					if timeout != nil {
@@ -791,7 +791,7 @@ func tryConnectProfile(
 								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
 							}
 						}
-						notifyConnected(profileName, int32(cfg.Workers))
+						notifyConnected(profileName, mode, int32(cfg.Workers))
 						wgTested = true
 
 						if timeout != nil {
@@ -840,7 +840,7 @@ func tryConnectProfile(
 								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
 							}
 						}
-						notifyConnected(profileName, int32(cfg.Workers))
+						notifyConnected(profileName, mode, int32(cfg.Workers))
 						wgTested = true
 
 						if timeout != nil {
@@ -852,7 +852,7 @@ func tryConnectProfile(
 					fmt.Println("[*] All workers completed")
 					teardownMode()
 					if !skipActiveProfileClear {
-						notifyDisconnectedSync(profileName)
+						notifyDisconnectedSync(profileName, mode)
 						clearActiveProfile()
 					}
 					return false, false, false
@@ -876,7 +876,7 @@ func tryConnectProfile(
 			c.Stop()
 			teardownMode()
 			if !skipActiveProfileClear {
-				notifyDisconnectedSync(profileName)
+				notifyDisconnectedSync(profileName, mode)
 				clearActiveProfile()
 			}
 			return false, true, false

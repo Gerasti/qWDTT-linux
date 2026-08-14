@@ -7,6 +7,7 @@ require (
 	github.com/bogdanfinn/tls-client v1.14.0
 	github.com/cbeuw/connutil v1.0.1
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/mdp/qrterminal v1.0.1
 	github.com/pion/dtls/v3 v3.1.2
@@ -35,11 +36,10 @@ require (
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/josharian/native v1.1.0 // indirect
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
-	github.com/mdlayher/netlink v1.7.2 // indirect
+	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/stun/v3 v3.1.2 // indirect

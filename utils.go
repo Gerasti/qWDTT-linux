@@ -330,6 +330,9 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 					break
 				}
 			}
+		} else if strings.Contains(cmdline, "-mode raw") || strings.Contains(cmdline, "--mode=raw") ||
+			strings.Contains(cmdline, "-mode=raw") {
+			d.Mode = "raw"
 		}
 
 		// Parse -bl / --black-list and -bl-file / --black-list-file

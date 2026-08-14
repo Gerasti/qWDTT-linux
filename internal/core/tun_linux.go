@@ -7,23 +7,29 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"sync"
 
+	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
 const RawIfaceName = "raw-qwdtt"
 
+const (
+	nftTableName = "wdtt_raw"
+	nftChainName = "output_mss"
+)
+
 // rawNetworking хранит state, добавленный setupRawTUN, чтобы
 // teardownRawTUN мог очистить всё в обратном порядке.
 var rawNetworking struct {
-	mu       sync.Mutex
-	iface    string
-	addr     string // назначенный сервером raw IP (из RAWCONF)
-	routes   []string
-	mssRules int
+	mu     sync.Mutex
+	iface  string
+	addr   string // назначенный сервером raw IP (из RAWCONF)
+	routes []string
+	mssSet bool
 }
 
 func createRawTUN(name string) (*os.File, error) {
@@ -53,7 +59,7 @@ func createRawTUN(name string) (*os.File, error) {
 	rawNetworking.iface = name
 	rawNetworking.routes = nil
 	rawNetworking.addr = ""
-	rawNetworking.mssRules = 0
+	rawNetworking.mssSet = false
 	rawNetworking.mu.Unlock()
 	return f, nil
 }
@@ -100,35 +106,43 @@ func setupRawTUN(name, addr string, mtu int) error {
 		added = append(added, cidr)
 	}
 
+	if err := setupRawMSSClampingNFT(name); err != nil {
+		return fmt.Errorf("mss clamp: %w", err)
+	}
+
 	rawNetworking.mu.Lock()
 	rawNetworking.addr = addr
 	rawNetworking.routes = added
-	rawNetworking.mssRules = setupRawMSSClamping(name)
+	rawNetworking.mssSet = true
 	rawNetworking.mu.Unlock()
 
 	log.Printf("[CORE] Raw TUN %s: ip=%s mtu=%d routes=%v", name, addr, mtu, added)
 	return nil
 }
 
-// teardownRawTUN удаляет маршруты, адрес, mangle-правила и сам интерфейс.
+// teardownRawTUN удаляет маршруты, адрес, nftables правила и сам интерфейс.
 func teardownRawTUN() error {
 	rawNetworking.mu.Lock()
 	name := rawNetworking.iface
 	addr := rawNetworking.addr
 	routes := rawNetworking.routes
-	mssRules := rawNetworking.mssRules
+	mssSet := rawNetworking.mssSet
 	rawNetworking.iface = ""
 	rawNetworking.addr = ""
 	rawNetworking.routes = nil
-	rawNetworking.mssRules = 0
+	rawNetworking.mssSet = false
 	rawNetworking.mu.Unlock()
 
 	if name == "" {
 		return nil
 	}
+
+	if mssSet {
+		teardownRawMSSClampingNFT()
+	}
+
 	link, err := netlink.LinkByName(name)
 	if err != nil || link == nil {
-		teardownRawMSSClamping(name, mssRules)
 		return nil
 	}
 	idx := link.Attrs().Index
@@ -144,46 +158,102 @@ func teardownRawTUN() error {
 		}
 	}
 	_ = netlink.LinkDel(link)
-	teardownRawMSSClamping(name, mssRules)
 	log.Printf("[CORE] Raw TUN %s удалён", name)
 	return nil
 }
 
-// commandExists проверяет наличие бинаря в PATH.
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+// ifname форматирует имя интерфейса как nftables ожидает для сравнения
+// в meta oifname: 16-байтный буфер с завершающим нулём (IFNAMSIZ).
+func ifname(n string) []byte {
+	b := make([]byte, 16)
+	copy(b, n+"\x00")
+	return b
 }
 
-func setupRawMSSClamping(iface string) int {
-	n := 0
-	if commandExists("iptables") {
-		for _, dir := range []string{"-o"} {
-			for _, action := range []string{"-D", "-I"} {
-				err := exec.Command("iptables", "-t", "mangle", action, "OUTPUT",
-					dir, iface, "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-					"-m", "comment", "--comment", "WDTT_RAW_MSS",
-					"-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
-				_ = err
-				if action == "-I" {
-					n++
-				}
-			}
-		}
+// setupRawMSSClampingNFT создаёт nftables-правило эквивалентное iptables:
+//
+//	iptables -t mangle -I OUTPUT -o <iface> -p tcp -m tcp --tcp-flags SYN,RST SYN \
+//	    -j TCPMSS --clamp-mss-to-pmtu
+//
+// Эквивалент на nftables:
+//
+//	nft add table ip wdtt_raw
+//	nft add chain ip wdtt_raw output_mss { type filter hook output priority mangle \; }
+//	nft add rule  ip wdtt_raw output_mss oifname <iface> tcp flags syn / syn,rst \
+//	    tcp option maxseg size set rt mtu
+//
+// В ядре (nft_exthdr.c, case TCPOPT_MSS) при выполнении exthdr-set для опции
+// MSS автоматически применяется min(current_mss, new_value): запись происходит
+// только если новое значение меньше текущего. Поэтому min() реализовывать в
+// userspace не нужно.
+func setupRawMSSClampingNFT(iface string) error {
+	c := &nftables.Conn{}
+
+	// На случай, если предыдущий процесс не успел удалить таблицу
+	// (например, после аварийного завершения) — чистим перед созданием.
+	c.DelTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   nftTableName,
+	})
+
+	table := c.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   nftTableName,
+	})
+
+	chain := c.AddChain(&nftables.Chain{
+		Name:     nftChainName,
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookOutput,
+		Priority: nftables.ChainPriorityMangle,
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			// Match: output interface == iface
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname(iface)},
+
+			// Match: L4 protocol == TCP
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
+
+			// Match: TCP flags & (SYN|RST) == SYN — только чистые SYN пакеты
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 13, Len: 1},
+			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 1, Mask: []byte{0x06}, Xor: []byte{0x00}},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0x02}},
+
+			// Action: установить TCP опцию 2 (MSS) из маршрута rt tcpmss.
+			// Ядро сравнит с текущим значением и запишет только если new < old.
+			&expr.Rt{Register: 1, Key: expr.RtTCPMSS},
+			&expr.Exthdr{
+				SourceRegister: 1,
+				Type:           2, // TCPOPT_MSS
+				Offset:         2, // пропустить kind(1) + len(1)
+				Len:            2,
+				Op:             expr.ExthdrOpTcpopt,
+			},
+		},
+	})
+
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("nft flush: %w", err)
 	}
-	return n
+	log.Printf("[CORE] nftables MSS clamping rule applied for %s", iface)
+	return nil
 }
 
-// teardownRawMSSClamping убирает правила MSS, добавленные setupRawMSSClamping.
-func teardownRawMSSClamping(iface string, n int) {
-	if !commandExists("iptables") {
-		return
-	}
-	for i := 0; i < n; i++ {
-		_ = exec.Command("iptables", "-t", "mangle", "-D", "OUTPUT",
-			"-o", iface, "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-			"-m", "comment", "--comment", "WDTT_RAW_MSS",
-			"-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
+// teardownRawMSSClampingNFT удаляет таблицу целиком (вместе с chain и правилом).
+func teardownRawMSSClampingNFT() {
+	c := &nftables.Conn{}
+	c.DelTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   nftTableName,
+	})
+	if err := c.Flush(); err != nil {
+		log.Printf("[CORE] nft teardown: %v", err)
 	}
 }
-

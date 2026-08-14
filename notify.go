@@ -35,20 +35,33 @@ func notifyDBus(summary, body, icon string) {
 	}
 }
 
-func notifyConnected(profileName string, workers int32) {
-	go notifyDBus(appName+": Подключено",
+// modeLabel converts an internal mode string into a human-readable label
+// for display in notifications.
+func modeLabel(mode string) string {
+	switch mode {
+	case "socks":
+		return "SOCKS5"
+	case "raw":
+		return "RAW"
+	default:
+		return "TUN"
+	}
+}
+
+func notifyConnected(profileName, mode string, workers int32) {
+	go notifyDBus(fmt.Sprintf("%s: Подключено [%s]", appName, modeLabel(mode)),
 		fmt.Sprintf("Подключение активно: %s\nАктивных воркеров: %d", profileName, workers),
 		"network-transmit-receive")
 }
 
-func notifyDisconnected(profileName string) {
-	go notifyDBus(appName+": Отключено",
+func notifyDisconnected(profileName, mode string) {
+	go notifyDBus(fmt.Sprintf("%s: Отключено [%s]", appName, modeLabel(mode)),
 		fmt.Sprintf("Соединение разорвано: %s", profileName),
 		"network-offline")
 }
 
-func notifyDisconnectedSync(profileName string) {
-	notifyDBus(appName+": Отключено",
+func notifyDisconnectedSync(profileName, mode string) {
+	notifyDBus(fmt.Sprintf("%s: Отключено [%s]", appName, modeLabel(mode)),
 		fmt.Sprintf("Соединение разорвано: %s", profileName),
 		"network-offline")
 }

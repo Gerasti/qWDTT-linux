@@ -1253,6 +1253,12 @@ func disconnectCmd() {
 		}
 	}
 
+	// Determine the mode of the profile being disconnected
+	disconnectMode := "tun"
+	if d, ok := runningDetails[targetProfile]; ok {
+		disconnectMode = d.Mode
+	}
+
 	// If autoswitch daemon is running and the target is the profile autoswitch is
 	// currently using, tell autoswitch to switch to the next profile instead of
 	// killing it directly (autoswitch would just reconnect it).
@@ -1264,7 +1270,7 @@ func disconnectCmd() {
 				fmt.Printf("[*] Отключение текущего профиля '%s' от autoswitch (переключение на следующий)...\n", targetProfile)
 				syscall.Kill(autoswitchPID, syscall.SIGUSR1)
 				clearAutoswitchCurrentProfile()
-				notifyDisconnectedSync(targetProfile)
+				notifyDisconnectedSync(targetProfile, disconnectMode)
 				fmt.Println("[OK] Отключено")
 				return
 			}
@@ -1287,7 +1293,7 @@ func disconnectCmd() {
 	removeSplitCfg(targetProfile)
 
 	// Notify that the profile was disconnected
-	notifyDisconnectedSync(targetProfile)
+	notifyDisconnectedSync(targetProfile, disconnectMode)
 
 	// If disconnecting the active profile, clear it
 	if wasActive {
