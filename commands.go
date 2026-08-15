@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal"
+	"qwdtt/internal/core"
 )
 
 // splitFlagsAndArgs separates command-line arguments into flag arguments and
@@ -85,6 +86,10 @@ func addCmd() {
 		devID = getOrCreateDeviceID()
 	}
 
+	// Check if profile already exists
+	existing, err := loadProfile(name)
+	profileExisted := err == nil
+
 	prof := ProfileData{
 		PeerAddr: fmt.Sprintf("%s:%s", link.IP, link.DTLSPort),
 		Password: link.Password,
@@ -93,9 +98,9 @@ func addCmd() {
 		DeviceID: devID,
 	}
 
-	// Check if profile already exists
-	_, err = loadProfile(name)
-	profileExisted := err == nil
+	if profileExisted && len(existing.Groups) > 0 {
+		prof.Groups = existing.Groups
+	}
 
 	if err := saveProfile(name, prof); err != nil {
 		log.Fatalf("Ошибка сохранения профиля: %v", err)
@@ -451,6 +456,7 @@ func listCmd() {
 	dis := fs.Bool("dis", false, "Show only disabled profiles")
 	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
 	ro := fs.Bool("ro", false, "Show only read-only profiles")
+	active := fs.Bool("active", false, "Show only running profiles")
 	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
@@ -501,6 +507,21 @@ func listCmd() {
 		regularProfiles = nil
 	}
 
+	// Filter: -active shows only running profiles
+	if *active {
+		filterActive := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				if p.active {
+					filtered = append(filtered, p)
+				}
+			}
+			return filtered
+		}
+		regularProfiles = filterActive(regularProfiles)
+		readOnlyProfiles = filterActive(readOnlyProfiles)
+	}
+
 	// Sort profiles by priority (highest first), then by name
 	sortProfilesByPriority := func(profiles []profileInfo) {
 		sort.Slice(profiles, func(i, j int) bool {
@@ -523,6 +544,9 @@ func listCmd() {
 		}
 		if *ro {
 			conditions = append(conditions, "read-only")
+		}
+		if *active {
+			conditions = append(conditions, "работающих")
 		}
 		suffix := ""
 		if len(conditions) > 0 {
@@ -551,6 +575,8 @@ func listCmd() {
 				activeMarker = "*"
 				if p.mode == "socks" {
 					modeStr = fmt.Sprintf(" [socks:%d]", p.socksPort)
+				} else if p.mode == "raw" {
+					modeStr = " [raw]"
 				} else {
 					modeStr = " [tun]"
 				}
@@ -581,13 +607,22 @@ func listCmd() {
 			coloredStatus := statusColor + paddedStatus + colorReset
 
 			// Color and pad mode string for alignment
-			paddedMode := fmt.Sprintf("%-22s", modeStr)
+			paddedMode := fmt.Sprintf("%-15s", modeStr)
 			coloredPaddedMode := paddedMode
 			if p.active && p.mode == "socks" {
 				coloredPaddedMode = colorCyan + paddedMode + colorReset
 			}
 			if isAutoswitchCurrent && !p.active {
 				coloredPaddedMode = colorYellow + paddedMode + colorReset
+			}
+
+			// For active autoswitch profile, don't pad mode string to reduce spacing before [autoswitch]
+			if isAutoswitchCurrent && p.active {
+				if p.active && p.mode == "socks" {
+					coloredPaddedMode = colorCyan + modeStr + colorReset
+				} else {
+					coloredPaddedMode = modeStr
+				}
 			}
 
 			groupsStr := ""
@@ -639,6 +674,8 @@ func listCmd() {
 			if d, ok := runningDetails[activeProfile]; ok {
 				if d.Mode == "socks" {
 					modeStr = fmt.Sprintf(" [socks:%d]", d.SocksPort)
+				} else if d.Mode == "raw" {
+					modeStr = " [raw]"
 				} else {
 					modeStr = " [tun]"
 				}
@@ -1069,7 +1106,29 @@ func listReadOnlyProfileNames() []string {
 		}
 		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
 	}
+	return names
+}
 
+// listNonReadOnlyProfileNames returns profile names from the user profiles
+// directory only (i.e. excluding read-only / ro-* profiles managed by the system).
+func listNonReadOnlyProfileNames() []string {
+	var names []string
+
+	entries, err := os.ReadDir(filepath.Join(configDir(), "profiles"))
+	if err != nil {
+		return names
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if strings.HasPrefix(name, "ro-") {
+			continue
+		}
+		names = append(names, name)
+	}
 	return names
 }
 
@@ -1235,6 +1294,8 @@ func disconnectCmd() {
 				if d, ok := runningDetails[name]; ok {
 					if d.Mode == "socks" {
 						detailStr = fmt.Sprintf(" [socks:%d]", d.SocksPort)
+					} else if d.Mode == "raw" {
+						detailStr = " [raw]"
 					} else {
 						detailStr = " [tun]"
 					}
@@ -1583,9 +1644,15 @@ func debugCmd() {
 		}
 	} else {
 		fmt.Println("[!] Нет запущенных профилей (PID-файлы не найдены)")
+		return
 	}
 
-	if stats, err := getWGStats(); err == nil {
+	iface := wgIface
+	if hasRawModeProfile(details) {
+		iface = core.RawIfaceName
+	}
+
+	if stats, err := getWGStats(iface); err == nil {
 		fmt.Printf("Input:\n")
 		fmt.Printf("  Bytes: %s\n", formatBytes(stats.RxBytes))
 		fmt.Printf("  Packets: %d\n\n", stats.RxPackets)
@@ -1605,6 +1672,15 @@ func debugCmd() {
 	} else {
 		fmt.Printf("Использование ресурсов (qwdtt):\n  [ERROR] %v\n", err)
 	}
+}
+
+func hasRawModeProfile(details map[string]*ProfileDetails) bool {
+	for _, d := range details {
+		if d.Mode == "raw" {
+			return true
+		}
+	}
+	return false
 }
 
 func shareCmd() {

@@ -3,10 +3,12 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/google/nftables"
@@ -107,7 +109,10 @@ func setupRawTUN(name, addr string, mtu int) error {
 	}
 
 	if err := setupRawMSSClampingNFT(name); err != nil {
-		return fmt.Errorf("mss clamp: %w", err)
+		if !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no such file or directory") {
+			return fmt.Errorf("mss clamp: %w", err)
+		}
+		log.Printf("[CORE] Raw TUN %s: nftables MSS clamping unavailable (kernel/nftables not supported), continuing without", name)
 	}
 
 	rawNetworking.mu.Lock()

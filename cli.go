@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 )
 
 const version = "0.9.5"
@@ -22,10 +23,11 @@ Profile Management:
   move <old_name> <new_name>  Rename a profile (alias: mv)
   edit/remove/show/enable/disable/test also accept glob masks, e.g. rm 'wdtt_*'
                               (quote the mask to avoid shell globbing)
-  list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
+   list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
                                -en/-enabled: enabled only
                                -dis/-disabled: disabled only
                                -ro: read-only profiles only
+                               -active: running profiles only
   show <name1> [name2] ...    Show profile details (alias: sh)
                               -group GROUP: show all profiles in the group
   share <name>                Show profile share link and QR code
@@ -90,9 +92,13 @@ Connect Flags:
                                          socks - local SOCKS5 proxy
                                          raw - raw IP without WireGuard (server -listen-raw)
   -socks-port PORT            SOCKS5 port (default: 9050)
-                                  Required with -mode socks
+                                   Required with -mode socks
+  -socks-user USER            SOCKS5 username (only with -mode socks)
+  -socks-password PASS        SOCKS5 password (only with -mode socks)
   -raw-port PORT              Raw mode server port (default: 56003)
-                                  Only with -mode raw
+                                 Only with -mode raw
+  -transport TRANSPORT        Transport to TURN relay: udp or tcp (default: udp)
+                                 Use tcp where UDP to the TURN relay is blocked
   -log                        Show daemon log output in terminal in real-time
   -toggle                     Stop running profile, or start if not running
   -bl DOMAINS or IP, --black-list   These domains go direct; everything else goes through tunnel
@@ -222,6 +228,10 @@ func main() {
 		for _, name := range listAllProfileNames() {
 			fmt.Println(name)
 		}
+	case "__complete_user":
+		for _, name := range listNonReadOnlyProfileNames() {
+			fmt.Println(name)
+		}
 	case "__complete_logs":
 		for _, name := range listLogProfileNames() {
 			fmt.Println(name)
@@ -239,6 +249,16 @@ func main() {
 					fmt.Println(g)
 				}
 			}
+		}
+	case "__complete_running":
+		running := getRunningProfiles()
+		names := make([]string, 0, len(running))
+		for name := range running {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Println(name)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)

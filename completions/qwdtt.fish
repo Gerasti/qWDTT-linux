@@ -20,6 +20,11 @@ function __qwdtt_disabled_profiles
     qwdtt __complete_disabled 2>/dev/null
 end
 
+# Helper function to get non-read-only (user) profile names
+function __qwdtt_user_profiles
+    qwdtt __complete_user 2>/dev/null
+end
+
 # Helper function to get group names
 function __qwdtt_groups
     qwdtt __complete_groups 2>/dev/null
@@ -72,7 +77,10 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -l timeout -d "Connectio
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l auto-switch -d "Auto-switch on failure"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l mode -d "Connection mode" -a "tun socks raw"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-port -d "SOCKS5 port (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-user -d "SOCKS5 username (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l socks-password -d "SOCKS5 password (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l raw-port -d "Raw mode server port (only with -mode raw)"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -l transport -d "Transport to TURN relay" -a "udp tcp"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l toggle -d "Stop running profile, or start if not running"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -l black-list -a "bl" -d "These domains go direct"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -s bl -l bl -d "Alias for --black-list"
@@ -90,6 +98,13 @@ complete -c qwdtt -n "__qwdtt_seen_command remove rm" -s y -l y -l yes -d "Skip 
 
 # move/mv - all profile names for both arguments
 complete -c qwdtt -n "__qwdtt_seen_command move mv" -a "(__qwdtt_all_profiles)" -d "Profile"
+
+# disconnect/discon - running profile names
+function __qwdtt_running_profiles
+    qwdtt __complete_running 2>/dev/null
+end
+
+complete -c qwdtt -n "__qwdtt_seen_command disconnect discon" -a "(__qwdtt_running_profiles)" -d "Profile"
 
 # enable/en - only disabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Profile"
@@ -110,7 +125,8 @@ complete -c qwdtt -n "__qwdtt_seen_command edit" -l priority -d "Profile priorit
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l groups -d "Profile groups (comma-separated)"
 complete -c qwdtt -n "__qwdtt_seen_command edit" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
 
-# add - flags only
+# add - existing non-read-only profile names and flags
+complete -c qwdtt -n "__qwdtt_seen_command add" -a "(__qwdtt_user_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command add" -l device-id -d "Device ID"
 
 # log/lg - profile names from existing log files and flags
@@ -125,6 +141,7 @@ complete -c qwdtt -n "__qwdtt_seen_command list ls" -l enabled -d "Show only ena
 complete -c qwdtt -n "__qwdtt_seen_command list ls" -l dis -d "Show only disabled profiles"
 complete -c qwdtt -n "__qwdtt_seen_command list ls" -l disabled -d "Show only disabled profiles"
 complete -c qwdtt -n "__qwdtt_seen_command list ls" -l ro -d "Show only read-only profiles"
+complete -c qwdtt -n "__qwdtt_seen_command list ls" -l active -d "Show only running profiles"
 
 # test - profile names and flags
 complete -c qwdtt -n "__qwdtt_seen_command test" -a "(__qwdtt_all_profiles)" -d "Profile"
@@ -135,5 +152,7 @@ complete -c qwdtt -n "__qwdtt_seen_command test" -s dis -l dis -d "Test only dis
 complete -c qwdtt -n "__qwdtt_seen_command test" -s disabled -l disabled -d "Test only disabled profiles"
 complete -c qwdtt -n "__qwdtt_seen_command test" -l group -r -a "(__qwdtt_groups)" -d "Test all profiles in this group"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s timeout -l timeout -d "Connection timeout in seconds"
-complete -c qwdtt -n "__qwdtt_seen_command test" -s mode -l mode -d "Connection mode" -a "tun socks"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s mode -l mode -d "Connection mode" -a "tun socks raw"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-port -l socks-port -d "SOCKS5 port"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-user -l socks-user -d "SOCKS5 username (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-password -l socks-password -d "SOCKS5 password (only with -mode socks)"

@@ -45,8 +45,10 @@ func testCmd() {
 	enabled := fs.Bool("enabled", false, "Test only enabled profiles")
 	dis := fs.Bool("dis", false, "Test only disabled profiles (alias for -disabled)")
 	disabled := fs.Bool("disabled", false, "Test only disabled profiles")
-	mode := fs.String("mode", "tun", "Connection mode (tun|socks)")
+	mode := fs.String("mode", "tun", "Connection mode (tun|socks|raw)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
+	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
+	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
 	group := fs.String("group", "", "Test all profiles in this group")
 
 	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
@@ -63,8 +65,8 @@ func testCmd() {
 
 	args = expandProfileMasks(args)
 
-	if *mode != "tun" && *mode != "socks" {
-		fmt.Fprintf(os.Stderr, "[ERROR] Недопустимый режим: %s (доступные: tun, socks)\n", *mode)
+	if *mode != "tun" && *mode != "raw" && *mode != "socks" {
+		fmt.Fprintf(os.Stderr, "[ERROR] Недопустимый режим: %s (доступные: tun, socks, raw)\n", *mode)
 		os.Exit(1)
 	}
 
@@ -172,7 +174,7 @@ func testCmd() {
 	})
 
 	for i, label := range linkLabels {
-		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, label)
+		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, label)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -185,7 +187,7 @@ func testCmd() {
 	}
 
 	for idx, name := range targetProfiles {
-		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort)
+		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -200,7 +202,7 @@ func testCmd() {
 	fmt.Printf("=== Summary: %d passed, %d failed ===\n", passCount, failCount)
 }
 
-func testProfile(name string, timeout time.Duration, mode string, socksPort int) TestResult {
+func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string) TestResult {
 	// Suppress internal log output — only show test stage results
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
@@ -256,6 +258,10 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 		DNS:         "yandex",
 		Mode:        mode,
 		SocksPort:   socksPort,
+		SocksUser:   socksUser,
+		SocksPass:   socksPass,
+		RawMode:     mode == "raw",
+		RawPort:     "56003",
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
@@ -288,6 +294,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 	connectPassed := false
 	workersPassed := false
 	wgApplied := false
+	rawApplied := false
 	var wr *core.WireproxyRunner
 
 	done := false
@@ -319,7 +326,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort, nil, nil)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
@@ -339,6 +346,17 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 						result.InternetCheck = testInternetCheck("socks", cfg.SocksPort)
 					}
 				}
+				if cfg.Mode == "raw" && ev.Name == "raw_conf" && !connectPassed {
+					rawApplied = true
+					if gateway := defaultGateway(); gateway != nil {
+						turnIPs := c.GetTurnIPs()
+						applyTurnIPsBypass(turnIPs, gateway)
+					}
+					connectPassed = true
+					result.Connect = "✓"
+					fmt.Printf("  [✓] Connect (%s)\n", cfg.Mode)
+					result.InternetCheck = testInternetCheck("raw", 0)
+				}
 				if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
@@ -356,6 +374,11 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 				}
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
+				done = true
+			}
+
+			allStagesDone := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+			if allStagesDone {
 				done = true
 			}
 		}
@@ -384,6 +407,10 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 		// Brief delay for kernel to release the wg-qwdtt interface
 		time.Sleep(500 * time.Millisecond)
 	}
+	if rawApplied {
+		teardownTunnelRoutes()
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	if !vkAuthPassed {
 		fmt.Printf("  [✗] VKAuth\n")
@@ -405,7 +432,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int)
 // testInternetCheck pings 8.8.8.8 and 1.1.1.1 through the tunnel/proxy.
 // In tun mode, pings directly through the wg-qwdtt interface.
 // In socks mode, uses curl via the SOCKS5 proxy.
-func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, linkStr string) TestResult {
+func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, linkStr string) TestResult {
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLogOutput)
@@ -436,6 +463,10 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		DNS:         "yandex",
 		Mode:        mode,
 		SocksPort:   socksPort,
+		SocksUser:   socksUser,
+		SocksPass:   socksPass,
+		RawMode:     mode == "raw",
+		RawPort:     "56003",
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
@@ -464,6 +495,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 	connectPassed := false
 	workersPassed := false
 	wgApplied := false
+	rawApplied := false
 	var wr *core.WireproxyRunner
 
 	done := false
@@ -492,7 +524,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort, nil, nil)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
@@ -512,6 +544,17 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 						result.InternetCheck = testInternetCheck("socks", cfg.SocksPort)
 					}
 				}
+				if cfg.Mode == "raw" && ev.Name == "raw_conf" && !connectPassed {
+					rawApplied = true
+					if gateway := defaultGateway(); gateway != nil {
+						turnIPs := c.GetTurnIPs()
+						applyTurnIPsBypass(turnIPs, gateway)
+					}
+					connectPassed = true
+					result.Connect = "✓"
+					fmt.Printf("  [✓] Connect (%s)\n", cfg.Mode)
+					result.InternetCheck = testInternetCheck("raw", 0)
+				}
 				if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
@@ -529,6 +572,11 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 				}
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
+				done = true
+			}
+
+			allStagesDone := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+			if allStagesDone {
 				done = true
 			}
 		}
@@ -552,6 +600,10 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		} else {
 			_ = teardownWG()
 		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if rawApplied {
+		teardownTunnelRoutes()
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -578,6 +630,18 @@ func testInternetCheck(mode string, socksPort int) string {
 	if mode == "tun" {
 		for _, host := range hosts {
 			cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", wgIface, host)
+			if cmd.Run() == nil {
+				fmt.Printf("  [✓] InternetCheck (ping %s)\n", host)
+				return "✓"
+			}
+		}
+		fmt.Printf("  [✗] InternetCheck\n")
+		return "✗"
+	}
+
+	if mode == "raw" {
+		for _, host := range hosts {
+			cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", core.RawIfaceName, host)
 			if cmd.Run() == nil {
 				fmt.Printf("  [✓] InternetCheck (ping %s)\n", host)
 				return "✓"

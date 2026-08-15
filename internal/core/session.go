@@ -27,10 +27,9 @@ const (
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
 	keepaliveByte = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
-	// keepaliveInterval: 1с (как у референсного клиента) — агрессивнее держит
-	// TURN permission/NAT-маппинг "тёплым" на каждом из 18-108 relay-сокетов
-	// сессии, чем прежние 15с/5с.
-	keepaliveInterval = 1 * time.Second
+	// keepaliveInterval: 10с — держит TURN permission/NAT-маппинг "тёплым"
+	// на каждом из 18-108 relay-сокетов сессии.
+	keepaliveInterval = 10 * time.Second
 	// keepaliveMinSize/keepaliveMaxSize: keepalive-пакет теперь не
 	// фиксированного размера (было 1 байт постоянно) — случайная длина
 	// 25-44 байта имитирует "тишину" OPUS в реальном звонке; постоянный
@@ -119,13 +118,12 @@ func (c *obfsDirectConn) SetReadDeadline(t time.Time) error  { return c.relay.Se
 func (c *obfsDirectConn) SetWriteDeadline(t time.Time) error { return c.relay.SetWriteDeadline(t) }
 
 // dialTURNConn открывает сокет до TURN-сервера и оборачивает его в
-// net.PacketConn, которого ждёт turn.ClientConfig.Conn. По умолчанию — UDP
-// (как раньше). Если tcp=true, поднимает обычное TCP-соединение и
-// оборачивает его через turn.NewSTUNConn — это штатная, задокументированная
-// pion/turn возможность: NewSTUNConn сам разбирает STUN/ChannelData framing
-// поверх потокового TCP. Нужен на сетях, где UDP до TURN-relay душится.
-func dialTURNConn(turnAddr string, tcp bool) (net.PacketConn, io.Closer, error) {
-	if !tcp {
+// net.PacketConn, которого ждёт turn.ClientConfig.Conn. transport выбирает
+// протокол: "tcp" — TCP + turn.NewSTUNConn (штатная возможность pion/turn для
+// STUN/ChannelData framing поверх потокового TCP); "udp" или "" — UDP
+// (по умолчанию). TCP нужно на сетях, где UDP до TURN-relay душится.
+func dialTURNConn(turnAddr string, transport string) (net.PacketConn, io.Closer, error) {
+	if transport != "tcp" {
 		resolved, err := net.ResolveUDPAddr("udp", turnAddr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("резолв TURN: %w", err)
@@ -184,13 +182,13 @@ func RunSession(
 	}
 	turnAddr := net.JoinHostPort(urlhost, urlport)
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.Transport)
 	if err != nil {
 		return false, err
 	}
 	defer turnConnCloser.Close()
 
-	if tp.TCPTransport {
+	if tp.Transport == "tcp" {
 		log.Printf("[СЕССИЯ #%d] TURN TCP (%s)", sessionID, turnAddr)
 	} else {
 		log.Printf("[СЕССИЯ #%d] TURN UDP (%s)", sessionID, turnAddr)
@@ -418,6 +416,7 @@ func RunSession(
 			if useWrap {
 				errStr := strings.ToLower(err.Error())
 				if strings.Contains(errStr, "deadline") || strings.Contains(errStr, "timeout") {
+					dtlsConn.Close()
 					return false, fmt.Errorf("WRAP_AUTH_TIMEOUT: DTLS timeout, пароль/WRAP не подтверждён")
 				}
 			}
@@ -687,7 +686,7 @@ func RunPing(
 	}
 	turnAddr := net.JoinHostPort(urlhost, urlport)
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.Transport)
 	if err != nil {
 		return 0, err
 	}
@@ -719,12 +718,6 @@ func RunPing(
 		return 0, err
 	}
 
-	relay, err := tc.Allocate()
-	if err != nil {
-		return 0, err
-	}
-	defer relay.Close()
-
 	if allocateGate != nil {
 		select {
 		case <-allocateGate:
@@ -732,6 +725,12 @@ func RunPing(
 			return 0, ctx.Err()
 		}
 	}
+
+	relay, err := tc.Allocate()
+	if err != nil {
+		return 0, err
+	}
+	defer relay.Close()
 
 	pipeA, pipeB := connutil.AsyncPacketPipe()
 	defer pipeA.Close()

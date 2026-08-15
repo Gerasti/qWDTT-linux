@@ -93,26 +93,26 @@ type WGStats struct {
 	TxPackets int64
 }
 
-func getWGStats() (*WGStats, error) {
-	data, err := os.ReadFile("/sys/class/net/" + wgIface + "/statistics/rx_bytes")
+func getWGStats(iface string) (*WGStats, error) {
+	data, err := os.ReadFile("/sys/class/net/" + iface + "/statistics/rx_bytes")
 	if err != nil {
 		return nil, fmt.Errorf("интерфейс не найден")
 	}
 	rxBytes, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 
-	data, err = os.ReadFile("/sys/class/net/" + wgIface + "/statistics/tx_bytes")
+	data, err = os.ReadFile("/sys/class/net/" + iface + "/statistics/tx_bytes")
 	if err != nil {
 		return nil, err
 	}
 	txBytes, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 
-	data, err = os.ReadFile("/sys/class/net/" + wgIface + "/statistics/rx_packets")
+	data, err = os.ReadFile("/sys/class/net/" + iface + "/statistics/rx_packets")
 	if err != nil {
 		return nil, err
 	}
 	rxPackets, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 
-	data, err = os.ReadFile("/sys/class/net/" + wgIface + "/statistics/tx_packets")
+	data, err = os.ReadFile("/sys/class/net/" + iface + "/statistics/tx_packets")
 	if err != nil {
 		return nil, err
 	}
@@ -259,6 +259,8 @@ func getProcessUsage() (*ProcessUsage, error) {
 type ProfileDetails struct {
 	Mode          string // "tun" or "socks"
 	SocksPort     int    // SOCKS5 port (only relevant for socks mode)
+	SocksUser     string // SOCKS5 username (if specified via -socks-user)
+	SocksPass     string // SOCKS5 password (if specified via -socks-password)
 	PID           int    // Process PID
 	BlackList     string // raw -bl / --black-list value (comma-separated domains)
 	BlackListFile string // path to -bl-file / --black-list-file JSON file
@@ -337,6 +339,29 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 
 		// Parse -bl / --black-list and -bl-file / --black-list-file
 		fields := strings.Fields(cmdline)
+
+		// Parse -socks-user / -socks-password
+		for i, field := range fields {
+			if (field == "-socks-user" || field == "--socks-user") && i+1 < len(fields) {
+				d.SocksUser = fields[i+1]
+			}
+			if strings.HasPrefix(field, "-socks-user=") {
+				d.SocksUser = strings.TrimPrefix(field, "-socks-user=")
+			}
+			if strings.HasPrefix(field, "--socks-user=") {
+				d.SocksUser = strings.TrimPrefix(field, "--socks-user=")
+			}
+			if (field == "-socks-password" || field == "--socks-password") && i+1 < len(fields) {
+				d.SocksPass = fields[i+1]
+			}
+			if strings.HasPrefix(field, "-socks-password=") {
+				d.SocksPass = strings.TrimPrefix(field, "-socks-password=")
+			}
+			if strings.HasPrefix(field, "--socks-password=") {
+				d.SocksPass = strings.TrimPrefix(field, "--socks-password=")
+			}
+		}
+
 		for i, field := range fields {
 			if (field == "-bl" || field == "--bl" || field == "--black-list") && i+1 < len(fields) {
 				d.BlackList = fields[i+1]
@@ -371,6 +396,63 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 		}
 
 		details[profile] = d
+	}
+
+	// Handle autoswitch: the currently active profile runs under the autoswitch process
+	currentProfile := getAutoswitchCurrentProfile()
+	if currentProfile != "" {
+		// Read autoswitch PID
+		autoswitchPidStr := readPidFile(pidFilePath("autoswitch"))
+		autoswitchPid, err := strconv.Atoi(strings.TrimSpace(autoswitchPidStr))
+		if err == nil && isProcessAlive(autoswitchPid) {
+			if _, exists := details[currentProfile]; !exists {
+				// Try to parse cmdline of the autoswitch process for mode/socks-port
+				cmdlinePath := fmt.Sprintf("/proc/%d/cmdline", autoswitchPid)
+				cmdlineData, err := os.ReadFile(cmdlinePath)
+				mode := "tun"
+				socksPort := 0
+				if err == nil {
+					cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
+					if strings.Contains(cmdline, "-mode socks") || strings.Contains(cmdline, "--mode=socks") ||
+						strings.Contains(cmdline, "-mode=socks") {
+						mode = "socks"
+						socksPort = defaultSocksPort
+						fields := strings.Fields(cmdline)
+						for i, field := range fields {
+							if (field == "-socks-port" || field == "--socks-port") && i+1 < len(fields) {
+								port, pErr := strconv.Atoi(fields[i+1])
+								if pErr == nil {
+									socksPort = port
+								}
+								break
+							}
+							if strings.HasPrefix(field, "-socks-port=") {
+								port, pErr := strconv.Atoi(strings.TrimPrefix(field, "-socks-port="))
+								if pErr == nil {
+									socksPort = port
+								}
+								break
+							}
+							if strings.HasPrefix(field, "--socks-port=") {
+								port, pErr := strconv.Atoi(strings.TrimPrefix(field, "--socks-port="))
+								if pErr == nil {
+									socksPort = port
+								}
+								break
+							}
+						}
+					} else if strings.Contains(cmdline, "-mode raw") || strings.Contains(cmdline, "--mode=raw") ||
+						strings.Contains(cmdline, "-mode=raw") {
+						mode = "raw"
+					}
+				}
+				details[currentProfile] = &ProfileDetails{
+					Mode:      mode,
+					SocksPort: socksPort,
+					PID:       autoswitchPid,
+				}
+			}
+		}
 	}
 
 	return details

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -27,10 +28,12 @@ type Config struct {
 	DNS         string
 	Mode        string
 	SocksPort   int
+	SocksUser   string
+	SocksPass   string
 	WGRawConfig string
 	RawMode bool
 	NoDTLS bool
-	TCPTransport bool
+	Transport string
 	RawPort string
 }
 
@@ -126,6 +129,13 @@ func New(cfg Config) *Core {
 	if cfg.SocksPort <= 0 {
 		cfg.SocksPort = DefaultSocksPort
 	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Transport)) {
+	case "tcp":
+		cfg.Transport = "tcp"
+	default:
+		cfg.Transport = "udp"
+	}
 	c := &Core{
 		cfg:               cfg,
 		CaptchaResultChan: make(chan string, 1),
@@ -208,7 +218,7 @@ func (c *Core) Start() (<-chan Event, error) {
 		ObfsMode:     "audio",
 		NoDTLS:       c.cfg.NoDTLS || c.cfg.RawMode,
 		RawMode:      c.cfg.RawMode,
-		TCPTransport: c.cfg.TCPTransport,
+		Transport: c.cfg.Transport,
 	}
 
 	// В raw-режиме нет UDP loopback (обычно 127.0.0.1:9000 для WireGuard)
@@ -225,8 +235,18 @@ func (c *Core) Start() (<-chan Event, error) {
 		}
 		localPort = "" 
 	} else {
-		var err error
-		localConn, err = net.ListenPacket("udp", c.cfg.Listen)
+		lc := net.ListenConfig{
+			Control: func(network, address string, c syscall.RawConn) error {
+				var setErr error
+				if err := c.Control(func(fd uintptr) {
+					setErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				}); err != nil {
+					return err
+				}
+				return setErr
+			},
+		}
+		localConn, err = lc.ListenPacket(ctx, "udp", c.cfg.Listen)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("listen %s: %w", c.cfg.Listen, err)

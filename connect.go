@@ -96,12 +96,15 @@ func connectCmd() {
 	mode := fs.String("mode", "tun", "Connection mode (tun|socks|raw)")
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	rawPort := fs.Int("raw-port", 56003, "Server raw port (only with -mode raw)")
+	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default udp). Use tcp where UDP is blocked")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
 	autoStop := fs.Bool("toggle", false, "Stop running profile, or start if not running")
 	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Comma-separated. TUN mode only")
 	fs.StringVar(blackList, "bl", "", "Alias for --black-list")
 	blackListFile := fs.String("black-list-file", "", "Read black-list domains from JSON file (bypassRoutes field). Can combine with -bl. TUN mode only")
 	fs.StringVar(blackListFile, "bl-file", "", "Alias for --black-list-file")
+	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
+	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		fs.Parse(os.Args[2:])
@@ -451,7 +454,7 @@ func connectCmd() {
 				success, wasResume, fatalErr := tryConnectProfile(
 					currentProfile,
 					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
-					*autoSwitch, *mode, *socksPort, *rawPort,
+					*autoSwitch, *mode, *socksPort, *socksUser, *socksPass, *rawPort, *transport,
 					sigCh, stopCh, cs.SolveChan(), sw.get(),
 					splitCfg,
 					false,        // shouldSetActive: handled in connectCmd for non-autoswitch
@@ -511,7 +514,9 @@ func tryConnectProfile(
 	autoSwitch bool,
 	mode string,
 	socksPort int,
+	socksUser, socksPass string,
 	rawPort int,
+	transport string,
 	sigCh chan os.Signal,
 	stopCh chan struct{},
 	captchaCh <-chan string,
@@ -551,8 +556,11 @@ func tryConnectProfile(
 		DNS:         dnsArg,
 		Mode:        mode,
 		SocksPort:   socksPort,
+		SocksUser:   socksUser,
+		SocksPass:   socksPass,
 		RawMode:     mode == "raw",
 		RawPort:     strconv.Itoa(rawPort),
+		Transport:   transport,
 	}
 
 	if hashesOverride != "" {
@@ -767,7 +775,7 @@ func tryConnectProfile(
 							bypassDomains = splitCfg.domains
 							bypassIPs, _ = resolveDomainIPs(splitCfg.domains)
 						}
-						wr = core.NewWireproxyRunner(socksPort, bypassDomains, bypassIPs)
+						wr = core.NewWireproxyRunner(socksPort, socksUser, socksPass, bypassDomains, bypassIPs)
 						if err := wr.Start(context.Background(), ev.Data); err != nil {
 							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
 							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)

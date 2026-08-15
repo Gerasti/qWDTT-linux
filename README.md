@@ -84,7 +84,6 @@ sudo nixos-rebuild switch
 ### Debian/Ubuntu
 
 ```bash
-sudo apt update
 sudo apt install iputils-ping curl patchelf
 ```
 
@@ -278,6 +277,7 @@ deb    - debug
   - `raw` — сырой IP-режим через TUN/TAP интерфейс, лучшая оптимизация на сервере 
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
 - `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
+- `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp). Использовать `tcp`, если UDP до TURN-relay блокируется
 - `-log` - выводить лог демона в терминал в реальном времени
 - `-bl` / `--black-list` - обход туннеля для указанных доменов/IP/CIDR: они идут напрямую, остальное — через туннель (режимы `tun`, `raw` и `socks`)
   - Через запятую, например: `-bl vk.ru,yandex.ru`

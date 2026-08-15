@@ -19,15 +19,19 @@ type WireproxyRunner struct {
 	tun            *wireproxy.VirtualTun
 	cancel         context.CancelFunc
 	socksPort      int
+	socksUser      string
+	socksPass      string
 	config         *wireproxy.Configuration
 	socksListener  net.Listener
 	bypassDomains  []string
 	bypassIPs      []string
 }
 
-func NewWireproxyRunner(socksPort int, bypassDomains, bypassIPs []string) *WireproxyRunner {
+func NewWireproxyRunner(socksPort int, socksUser, socksPass string, bypassDomains, bypassIPs []string) *WireproxyRunner {
 	return &WireproxyRunner{
 		socksPort:     socksPort,
+		socksUser:     socksUser,
+		socksPass:     socksPass,
 		bypassDomains: bypassDomains,
 		bypassIPs:     bypassIPs,
 	}
@@ -87,6 +91,10 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 	var confBuilder strings.Builder
 	confBuilder.WriteString(fmt.Sprintf("WGConfig = %s\n", tmpFile.Name()))
 	confBuilder.WriteString(fmt.Sprintf("[Socks5]\nBindAddress = 127.0.0.1:%d\n", w.socksPort))
+	if w.socksUser != "" {
+		confBuilder.WriteString(fmt.Sprintf("Username = %s\n", w.socksUser))
+		confBuilder.WriteString(fmt.Sprintf("Password = %s\n", w.socksPass))
+	}
 
 	if err := os.WriteFile(wireproxyConfigPath, []byte(confBuilder.String()), 0o644); err != nil {
 		return fmt.Errorf("failed to write wireproxy config: %w", err)
