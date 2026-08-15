@@ -53,14 +53,15 @@ Connection:
                                 Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
                                 Without args: test all profiles
                                 Each arg can be a profile name or wdtt:// link
-                                -ro: test only read-only profiles
+                               -ro: test only read-only profiles
                                -enabled/-en: test only enabled profiles
                                -disabled/-dis: test only disabled profiles
                                -group GROUP: test all profiles in the group
                                -mode tun|socks: connection mode (default: tun)
                                -socks-port N: SOCKS5 port (default: 9050, with -mode socks)
-                               -timeout N: connection timeout in seconds (default: 10)
-                               -delay N: pause between profiles in seconds (default: 5)
+                                -timeout N: connection timeout in seconds (default: 10)
+                                -delay N: pause between profiles in seconds (default: 5)
+                                -transport TRANSPORT: transport to TURN relay: udp or tcp (default: udp)
 
 Device ID Management:
   device-id [id]              Show or set Device ID (alias: id)

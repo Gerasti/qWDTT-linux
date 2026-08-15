@@ -593,7 +593,15 @@ func tryConnectProfile(
 		}
 	}
 
-	c := core.New(cfg)
+	c, err := core.New(cfg)
+	if err != nil {
+		notifyError(profileName, "Ошибка запуска")
+		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
+		if !skipActiveProfileClear {
+			clearActiveProfile()
+		}
+		return false, false, autoSwitch
+	}
 	events, err := c.Start()
 	if err != nil {
 		notifyError(profileName, "Ошибка запуска")

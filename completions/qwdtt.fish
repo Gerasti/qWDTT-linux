@@ -156,3 +156,5 @@ complete -c qwdtt -n "__qwdtt_seen_command test" -s mode -l mode -d "Connection 
 complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-port -l socks-port -d "SOCKS5 port"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-user -l socks-user -d "SOCKS5 username (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command test" -s socks-password -l socks-password -d "SOCKS5 password (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s transport -l transport -d "Transport to TURN relay" -a "udp tcp"
+complete -c qwdtt -n "__qwdtt_seen_command test" -s delay -l delay -d "Pause between profiles in seconds"

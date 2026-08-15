@@ -21,7 +21,6 @@ const defaultTestTimeoutSec = 10
 type TestResult struct {
 	Profile       string
 	VKAuth        string // "✓" / "✗"
-	Workers       int32
 	Connect       string // "✓" / "✗"
 	InternetCheck string // "✓" / "✗" / "n/a"
 	Error         string
@@ -49,6 +48,7 @@ func testCmd() {
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
+	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default: udp)")
 	group := fs.String("group", "", "Test all profiles in this group")
 
 	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
@@ -174,8 +174,8 @@ func testCmd() {
 	})
 
 	for i, label := range linkLabels {
-		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, label)
-		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
+		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *transport, label)
+		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
 			failCount++
@@ -187,8 +187,8 @@ func testCmd() {
 	}
 
 	for idx, name := range targetProfiles {
-		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass)
-		if result.VKAuth == "✓" && result.Connect == "✓" && result.Workers > 0 && result.InternetCheck == "✓" {
+		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *transport)
+		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
 			failCount++
@@ -202,7 +202,7 @@ func testCmd() {
 	fmt.Printf("=== Summary: %d passed, %d failed ===\n", passCount, failCount)
 }
 
-func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string) TestResult {
+func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, transport string) TestResult {
 	// Suppress internal log output — only show test stage results
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
@@ -213,7 +213,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		VKAuth:        "✗",
 		Connect:       "✗",
 		InternetCheck: "n/a",
-		Workers:       0,
 	}
 
 	fmt.Printf("=== Testing: %s ===\n", name)
@@ -221,7 +220,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	if isDaemonRunning(name) {
 		result.Error = "daemon already running"
 		fmt.Printf("  [✗] VKAuth (daemon уже запущен)\n")
-		fmt.Printf("  [✗] Workers: 0\n")
 		fmt.Printf("  [✗] Connect\n")
 		fmt.Printf("  [✗] InternetCheck (n/a)\n")
 		fmt.Printf("  → FAIL\n\n")
@@ -232,7 +230,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	if err != nil {
 		result.Error = err.Error()
 		fmt.Printf("  [✗] VKAuth (ошибка загрузки профиля: %v)\n", err)
-		fmt.Printf("  [✗] Workers: 0\n")
 		fmt.Printf("  [✗] Connect\n")
 		fmt.Printf("  [✗] InternetCheck (n/a)\n")
 		fmt.Printf("  → FAIL\n\n")
@@ -262,6 +259,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		SocksPass:   socksPass,
 		RawMode:     mode == "raw",
 		RawPort:     "56003",
+		Transport:   transport,
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
@@ -273,14 +271,21 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	_ = cs.Start()
 	defer cs.Stop()
 
-	c := core.New(cfg)
+	c, err := core.New(cfg)
+	if err != nil {
+		result.Error = err.Error()
+		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)
+		fmt.Printf("  [✗] Connect\n")
+		fmt.Printf("  [✗] InternetCheck (n/a)\n")
+		fmt.Printf("  → FAIL\n\n")
+		return result
+	}
 	defer c.Stop()
 
 	events, err := c.Start()
 	if err != nil {
 		result.Error = err.Error()
 		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)
-		fmt.Printf("  [✗] Workers: 0\n")
 		fmt.Printf("  [✗] Connect\n")
 		fmt.Printf("  [✗] InternetCheck (n/a)\n")
 		fmt.Printf("  → FAIL\n\n")
@@ -292,7 +297,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 
 	vkAuthPassed := false
 	connectPassed := false
-	workersPassed := false
 	wgApplied := false
 	rawApplied := false
 	var wr *core.WireproxyRunner
@@ -352,6 +356,11 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 						turnIPs := c.GetTurnIPs()
 						applyTurnIPsBypass(turnIPs, gateway)
 					}
+					warmup := 2 * time.Second
+					if transport == "tcp" {
+						warmup = 3 * time.Second
+					}
+					time.Sleep(warmup)
 					connectPassed = true
 					result.Connect = "✓"
 					fmt.Printf("  [✓] Connect (%s)\n", cfg.Mode)
@@ -366,18 +375,12 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 				if ev.Name == "workers_completed" {
 					done = true
 				}
-			case core.EventStats:
-				if ev.Workers > 0 && !workersPassed {
-					workersPassed = true
-					result.Workers = ev.Workers
-					fmt.Printf("  [✓] Workers: %d\n", ev.Workers)
-				}
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
 				done = true
 			}
 
-			allStagesDone := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+			allStagesDone := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
 			if allStagesDone {
 				done = true
 			}
@@ -415,11 +418,8 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	if !vkAuthPassed {
 		fmt.Printf("  [✗] VKAuth\n")
 	}
-	if !workersPassed {
-		fmt.Printf("  [✗] Workers: 0\n")
-	}
 
-	allPassed := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+	allPassed := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
 	if allPassed {
 		fmt.Printf("  → PASS\n\n")
 	} else {
@@ -432,7 +432,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 // testInternetCheck pings 8.8.8.8 and 1.1.1.1 through the tunnel/proxy.
 // In tun mode, pings directly through the wg-qwdtt interface.
 // In socks mode, uses curl via the SOCKS5 proxy.
-func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, linkStr string) TestResult {
+func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, transport string, linkStr string) TestResult {
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLogOutput)
@@ -442,7 +442,6 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		VKAuth:        "✗",
 		Connect:       "✗",
 		InternetCheck: "n/a",
-		Workers:       0,
 	}
 
 	fmt.Printf("=== Testing: %s ===\n", linkStr)
@@ -467,6 +466,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		SocksPass:   socksPass,
 		RawMode:     mode == "raw",
 		RawPort:     "56003",
+		Transport:   transport,
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
@@ -474,14 +474,21 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		cfg.Listen = "127.0.0.1:9000"
 	}
 
-	c := core.New(cfg)
+	c, err := core.New(cfg)
+	if err != nil {
+		result.Error = err.Error()
+		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)
+		fmt.Printf("  [✗] Connect\n")
+		fmt.Printf("  [✗] InternetCheck (n/a)\n")
+		fmt.Printf("  → FAIL\n\n")
+		return result
+	}
 	defer c.Stop()
 
 	events, err := c.Start()
 	if err != nil {
 		result.Error = err.Error()
 		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)
-		fmt.Printf("  [✗] Workers: 0\n")
 		fmt.Printf("  [✗] Connect\n")
 		fmt.Printf("  [✗] InternetCheck (n/a)\n")
 		fmt.Printf("  → FAIL\n\n")
@@ -493,7 +500,6 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 
 	vkAuthPassed := false
 	connectPassed := false
-	workersPassed := false
 	wgApplied := false
 	rawApplied := false
 	var wr *core.WireproxyRunner
@@ -550,6 +556,11 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 						turnIPs := c.GetTurnIPs()
 						applyTurnIPsBypass(turnIPs, gateway)
 					}
+					warmup := 2 * time.Second
+					if transport == "tcp" {
+						warmup = 3 * time.Second
+					}
+					time.Sleep(warmup)
 					connectPassed = true
 					result.Connect = "✓"
 					fmt.Printf("  [✓] Connect (%s)\n", cfg.Mode)
@@ -564,18 +575,12 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 				if ev.Name == "workers_completed" {
 					done = true
 				}
-			case core.EventStats:
-				if ev.Workers > 0 && !workersPassed {
-					workersPassed = true
-					result.Workers = ev.Workers
-					fmt.Printf("  [✓] Workers: %d\n", ev.Workers)
-				}
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
 				done = true
 			}
 
-			allStagesDone := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+			allStagesDone := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
 			if allStagesDone {
 				done = true
 			}
@@ -610,11 +615,8 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 	if !vkAuthPassed {
 		fmt.Printf("  [✗] VKAuth\n")
 	}
-	if !workersPassed {
-		fmt.Printf("  [✗] Workers: 0\n")
-	}
 
-	allPassed := vkAuthPassed && connectPassed && workersPassed && result.InternetCheck == "✓"
+	allPassed := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
 	if allPassed {
 		fmt.Printf("  → PASS\n\n")
 	} else {
@@ -625,7 +627,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 }
 
 func testInternetCheck(mode string, socksPort int) string {
-	hosts := []string{"8.8.8.8", "1.1.1.1"}
+	hosts := []string{"8.8.8.8", "1.1.1.1", "9.9.9.9", "208.67.222.222"}
 
 	if mode == "tun" {
 		for _, host := range hosts {
@@ -640,13 +642,27 @@ func testInternetCheck(mode string, socksPort int) string {
 	}
 
 	if mode == "raw" {
-		for _, host := range hosts {
-			cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", core.RawIfaceName, host)
-			if cmd.Run() == nil {
-				fmt.Printf("  [✓] InternetCheck (ping %s)\n", host)
-				return "✓"
+		pingRaw := func() bool {
+			for _, host := range hosts {
+				cmd := exec.Command("ping", "-c", "1", "-W", "3", "-I", core.RawIfaceName, host)
+				if cmd.Run() == nil {
+					fmt.Printf("  [✓] InternetCheck (ping %s)\n", host)
+					return true
+				}
 			}
+			return false
 		}
+
+		if pingRaw() {
+			return "✓"
+		}
+
+		// Retry once after brief pause — TCP TURN relay may need extra time to stabilize
+		time.Sleep(3 * time.Second)
+		if pingRaw() {
+			return "✓"
+		}
+
 		fmt.Printf("  [✗] InternetCheck\n")
 		return "✗"
 	}

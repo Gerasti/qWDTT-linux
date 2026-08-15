@@ -349,18 +349,18 @@ func moveCmd() {
 }
 
 func listCmd() {
- 	type profileInfo struct {
- 		name      string
- 		peer      string
- 		hashes    int
- 		status    string
- 		priority  int
- 		groups    []string
- 		active    bool
- 		mode      string // "tun" or "socks" (only set if active)
- 		socksPort int    // SOCKS5 port (only set if active)
- 		readOnly  bool
- 	}
+	type profileInfo struct {
+		name      string
+		peer      string
+		hashes    int
+		status    string
+		priority  int
+		groups    []string
+		active    bool
+		mode      string // "tun" or "socks" (only set if active)
+		socksPort int    // SOCKS5 port (only set if active)
+		readOnly  bool
+	}
 
 	var regularProfiles []profileInfo
 	var readOnlyProfiles []profileInfo
@@ -631,15 +631,15 @@ func listCmd() {
 			}
 
 			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s%s\n",
-					activeMarker,
-					maxNameLen, p.name,
-					maxPeerLen, p.peer,
-					p.hashes,
-					coloredStatus,
-					p.priority,
-					groupsStr,
-					coloredPaddedMode,
-					autoswitchMarker)
+				activeMarker,
+				maxNameLen, p.name,
+				maxPeerLen, p.peer,
+				p.hashes,
+				coloredStatus,
+				p.priority,
+				groupsStr,
+				coloredPaddedMode,
+				autoswitchMarker)
 		}
 	}
 
@@ -1584,6 +1584,7 @@ func debugCmd() {
 		fmt.Println()
 
 		// Show detailed config for each running profile
+		currentAutoswitchProfile := getAutoswitchCurrentProfile()
 		for idx, e := range sorted {
 			if idx > 0 {
 				fmt.Println("  ---")
@@ -1598,9 +1599,8 @@ func debugCmd() {
 				fmt.Printf("  PID: %d\n", e.d.PID)
 
 				// Show current autoswitch profile
-				currentProfile := getAutoswitchCurrentProfile()
-				if currentProfile != "" {
-					fmt.Printf("  Текущий профиль: %s\n", currentProfile)
+				if currentAutoswitchProfile != "" {
+					fmt.Printf("  Текущий профиль: %s\n", currentAutoswitchProfile)
 				} else {
 					fmt.Printf("  Текущий профиль: (нет активного подключения)\n")
 				}
@@ -1639,7 +1639,11 @@ func debugCmd() {
 			} else {
 				fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
 			}
-			printBlackList(e.d)
+			if isDaemonRunning("autoswitch") && e.name == currentAutoswitchProfile {
+				fmt.Printf("  Black list: (управляется autoswitch — см. выше)\n")
+			} else {
+				printBlackList(e.d)
+			}
 			fmt.Println()
 		}
 	} else {

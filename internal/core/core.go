@@ -31,10 +31,10 @@ type Config struct {
 	SocksUser   string
 	SocksPass   string
 	WGRawConfig string
-	RawMode bool
-	NoDTLS bool
-	Transport string
-	RawPort string
+	RawMode     bool
+	NoDTLS      bool
+	Transport   string
+	RawPort     string
 }
 
 type EventType string
@@ -113,7 +113,7 @@ func (c *Core) GetTurnIPs() []string {
 }
 
 // New создаёт Core. Start() запускает его.
-func New(cfg Config) *Core {
+func New(cfg Config) (*Core, error) {
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:9000"
 	}
@@ -129,11 +129,15 @@ func New(cfg Config) *Core {
 	if cfg.SocksPort <= 0 {
 		cfg.SocksPort = DefaultSocksPort
 	}
+	if cfg.Mode != "tun" && cfg.Mode != "socks" && cfg.Mode != "raw" {
+		return nil, fmt.Errorf("invalid mode %q: must be \"tun\", \"socks\" or \"raw\"", cfg.Mode)
+	}
 
-	switch strings.ToLower(strings.TrimSpace(cfg.Transport)) {
-	case "tcp":
-		cfg.Transport = "tcp"
-	default:
+	t := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	if t != "" && t != "udp" && t != "tcp" {
+		return nil, fmt.Errorf("invalid transport %q: must be \"udp\" or \"tcp\"", cfg.Transport)
+	}
+	if t != "tcp" {
 		cfg.Transport = "udp"
 	}
 	c := &Core{
@@ -142,7 +146,7 @@ func New(cfg Config) *Core {
 		events:            make(chan Event, 256),
 	}
 	c.captchaMode.Store(normalizeCaptchaMode(cfg.CaptchaMode))
-	return c
+	return c, nil
 }
 
 // Start запускает ядро. Возвращает канал событий (закрывается при завершении).
@@ -211,13 +215,13 @@ func (c *Core) Start() (<-chan Event, error) {
 	n = (n / workersPerGroup) * workersPerGroup
 
 	tp := &TurnParams{
-		Host:         c.cfg.TurnHost,
-		Port:         c.cfg.TurnPort,
-		Hashes:       c.cfg.Hashes,
-		WrapKey:      wrapKey,
-		ObfsMode:     "audio",
-		NoDTLS:       c.cfg.NoDTLS || c.cfg.RawMode,
-		RawMode:      c.cfg.RawMode,
+		Host:      c.cfg.TurnHost,
+		Port:      c.cfg.TurnPort,
+		Hashes:    c.cfg.Hashes,
+		WrapKey:   wrapKey,
+		ObfsMode:  "audio",
+		NoDTLS:    c.cfg.NoDTLS || c.cfg.RawMode,
+		RawMode:   c.cfg.RawMode,
 		Transport: c.cfg.Transport,
 	}
 
@@ -233,7 +237,7 @@ func (c *Core) Start() (<-chan Event, error) {
 			cancel()
 			return nil, fmt.Errorf("create raw tun: %w", errTun)
 		}
-		localPort = "" 
+		localPort = ""
 	} else {
 		lc := net.ListenConfig{
 			Control: func(network, address string, c syscall.RawConn) error {
@@ -289,10 +293,10 @@ func (c *Core) Start() (<-chan Event, error) {
 				return
 			case <-ticker.C:
 				c.emit(Event{
-					Type:      EventStats,
-					RxBytes:   stats.TotalBytesDown.Load(),
-					TxBytes:   stats.TotalBytesUp.Load(),
-					Workers:   stats.ActiveConnections.Load(),
+					Type:    EventStats,
+					RxBytes: stats.TotalBytesDown.Load(),
+					TxBytes: stats.TotalBytesUp.Load(),
+					Workers: stats.ActiveConnections.Load(),
 				})
 			}
 		}
@@ -336,7 +340,7 @@ func (c *Core) Start() (<-chan Event, error) {
 		}
 	}()
 
-		c.emit(Event{Type: EventState, Status: "connecting"})
+	c.emit(Event{Type: EventState, Status: "connecting"})
 
 	go func() {
 		defer close(c.events)

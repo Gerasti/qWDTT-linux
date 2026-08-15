@@ -101,45 +101,11 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-group" -- "$cur") )
-            elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
-                COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
-            fi
-            ;;
-        edit)
-            if [[ $prev == "-group" ]]; then
-                local group_names=$(qwdtt __complete_groups 2>/dev/null)
-                COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
-            elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
-                local all_profiles=$(qwdtt __complete_all 2>/dev/null)
-                COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
-            elif [[ $cur == -* ]]; then
-                 COMPREPLY=( $(compgen -W "-peer -password -hashes -device-id -listen -priority -groups -group" -- "$cur") )
-            fi
-            ;;
-        move)
-            if [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
-                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
-                COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
-            fi
-            ;;
-        add)
-            if [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-device-id" -- "$cur") )
-            elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
-                local user_profiles=$(qwdtt __complete_user 2>/dev/null)
-                COMPREPLY=( $(compgen -W "$user_profiles" -- "$cur") )
-            fi
-            ;;
-        device-id)
-            # No completion for device-id argument
-            ;;
-        log)
-            if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
-                local log_profiles=$(qwdtt __complete_logs 2>/dev/null)
-                COMPREPLY=( $(compgen -W "$log_profiles" -- "$cur") )
-            elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-n -follow -f" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group -timeout -mode -socks-port -socks-user -socks-password -transport -delay" -- "$cur") )
+             elif [[ $prev == "-mode" ]]; then
+                COMPREPLY=( $(compgen -W "tun socks raw" -- "$cur") )
+             elif [[ $prev == "-transport" ]]; then
+                COMPREPLY=( $(compgen -W "udp tcp" -- "$cur") )
             fi
             ;;
         test)
