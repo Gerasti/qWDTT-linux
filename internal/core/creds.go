@@ -386,6 +386,9 @@ func getVkCredsCached(ctx context.Context, link string, streamID int, deviceID s
 		addrs := cloneStringSlice(cache.creds.ServerAddrs)
 		cache.mutex.RUnlock()
 		log.Printf("[STREAM %d] [VK Auth] Using cached credentials (cache=%d, expires in %v, selected=%s, urls=%d)", streamID, cacheID, expires.Truncate(time.Second), addr, len(addrs))
+		if emitLog != nil {
+			emitLog(fmt.Sprintf("[STREAM %d] [VK Auth] Success (cached)", streamID))
+		}
 		return u, p, addrs, nil
 	}
 	cache.mutex.RUnlock()
@@ -395,6 +398,9 @@ func getVkCredsCached(ctx context.Context, link string, streamID int, deviceID s
 
 	// Double-check inside lock
 	if cache.creds.Link == link && time.Now().Before(cache.creds.ExpiresAt) && len(cache.creds.ServerAddrs) > 0 {
+		if emitLog != nil {
+			emitLog(fmt.Sprintf("[STREAM %d] [VK Auth] Success (cached)", streamID))
+		}
 		return cache.creds.Username, cache.creds.Password, cloneStringSlice(cache.creds.ServerAddrs), nil
 	}
 

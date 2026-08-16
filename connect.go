@@ -622,6 +622,7 @@ func tryConnectProfile(
 	wgConfigured := false
 	rawConfigured := false
 	wgTested := false
+	vkAuthNotified := false
 	var wr *core.WireproxyRunner
 
 	var timeout *time.Timer
@@ -707,8 +708,6 @@ func tryConnectProfile(
 			case core.EventLog:
 				if strings.Contains(ev.Message, "Конфиг получен") {
 					fmt.Printf("[OK] %s\n", ev.Message)
-				} else if strings.Contains(ev.Message, "[VK Auth] Success") {
-					notifyVKAuth(profileName)
 				} else if ev.Level == "ERROR" {
 					fmt.Printf("[ERROR] %s\n", ev.Message)
 				} else if strings.Contains(ev.Message, "FATAL") {
@@ -886,6 +885,10 @@ func tryConnectProfile(
 						ev.Workers)
 					notifyWorkers(profileName, ev.Workers)
 				}
+			}
+			if !vkAuthNotified && c.IsVKAuthPassed() {
+				vkAuthNotified = true
+				notifyVKAuth(profileName)
 			}
 		case <-suspendCh:
 			fmt.Println("\n[*] Обнаружен resume, переподключение...")

@@ -81,6 +81,7 @@ type Core struct {
 	once              sync.Once
 	turnIPsMu         sync.Mutex
 	turnIPs           []string
+	vkAuthPassed      int32
 }
 
 // AddTurnIPs регистрирует TURN IP-адреса (без порта) для исключения из туннеля.
@@ -274,6 +275,9 @@ func (c *Core) Start() (<-chan Event, error) {
 		c.emit(Event{Type: EventEvent, Name: "captcha_required", Data: mode + "|" + redirectURI + "|" + sessionToken})
 	}
 	emitLog := func(msg string) {
+		if strings.Contains(msg, "[VK Auth] Success") {
+			c.SetVKAuthPassed()
+		}
 		c.emit(Event{Type: EventLog, Message: msg})
 	}
 
@@ -449,6 +453,16 @@ func (c *Core) emit(ev Event) {
 			}
 		}
 	}
+}
+
+// SetVKAuthPassed marks that VKAuth has succeeded at least once.
+func (c *Core) SetVKAuthPassed() {
+	atomic.StoreInt32(&c.vkAuthPassed, 1)
+}
+
+// IsVKAuthPassed reports whether VKAuth has succeeded.
+func (c *Core) IsVKAuthPassed() bool {
+	return atomic.LoadInt32(&c.vkAuthPassed) == 1
 }
 
 func (c *Core) getCaptchaMode() string {

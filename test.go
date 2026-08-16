@@ -294,6 +294,8 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	vkAuthPassed := false
 	connectPassed := false
@@ -306,6 +308,12 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		select {
 		case <-timer.C:
 			done = true
+		case <-ticker.C:
+			if !vkAuthPassed && c.IsVKAuthPassed() {
+				vkAuthPassed = true
+				result.VKAuth = "✓"
+				fmt.Printf("  [✓] VKAuth\n")
+			}
 		case result := <-cs.SolveChan():
 			fmt.Println("[*] Получен результат капчи через сокет")
 			c.SolveCaptcha(result)
@@ -318,12 +326,6 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 			case core.EventState:
 				if ev.Status == "connecting" {
 					fmt.Printf("  [*] Подключение...\n")
-				}
-			case core.EventLog:
-				if strings.Contains(ev.Message, "[VK Auth] Success") && !vkAuthPassed {
-					vkAuthPassed = true
-					result.VKAuth = "✓"
-					fmt.Printf("  [✓] VKAuth\n")
 				}
 			case core.EventEvent:
 				if ev.Name == "wg_config" && !connectPassed {
@@ -378,6 +380,12 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
 				done = true
+			}
+
+			if !vkAuthPassed && c.IsVKAuthPassed() {
+				vkAuthPassed = true
+				result.VKAuth = "✓"
+				fmt.Printf("  [✓] VKAuth\n")
 			}
 
 			allStagesDone := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
@@ -497,6 +505,8 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	vkAuthPassed := false
 	connectPassed := false
@@ -509,6 +519,12 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		select {
 		case <-timer.C:
 			done = true
+		case <-ticker.C:
+			if !vkAuthPassed && c.IsVKAuthPassed() {
+				vkAuthPassed = true
+				result.VKAuth = "✓"
+				fmt.Printf("  [✓] VKAuth\n")
+			}
 		case ev, ok := <-events:
 			if !ok {
 				done = true
@@ -518,12 +534,6 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 			case core.EventState:
 				if ev.Status == "connecting" {
 					fmt.Printf("  [*] Подключение...\n")
-				}
-			case core.EventLog:
-				if strings.Contains(ev.Message, "[VK Auth] Success") && !vkAuthPassed {
-					vkAuthPassed = true
-					result.VKAuth = "✓"
-					fmt.Printf("  [✓] VKAuth\n")
 				}
 			case core.EventEvent:
 				if ev.Name == "wg_config" && !connectPassed {
@@ -578,6 +588,12 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 			case core.EventError:
 				fmt.Printf("  [✗] Ошибка ядра: %s\n", ev.Message)
 				done = true
+			}
+
+			if !vkAuthPassed && c.IsVKAuthPassed() {
+				vkAuthPassed = true
+				result.VKAuth = "✓"
+				fmt.Printf("  [✓] VKAuth\n")
 			}
 
 			allStagesDone := vkAuthPassed && connectPassed && result.InternetCheck == "✓"
