@@ -37,7 +37,12 @@ Profile Management:
   disable <name1> [name2] ... Disable profiles (alias: dis)
                               -group GROUP: disable all profiles in the group
   import <file>               Import profiles from JSON or ZIP file
-                               -dry-run: show what would be imported without saving
+                                -dry-run: show what would be imported without saving
+  bl list                   List bypass route domains
+  bl add <d1> [d2...]       Add domains to bypass routes file
+  bl remove <d1> [d2...]    Remove domains from bypass routes file
+  bl find <d1> [d2...]      Check if domains exist in bypass routes file
+                                All bl subcommands require -file PATH
 
 Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
@@ -205,6 +210,8 @@ func main() {
 		disableCmd()
 	case "import":
 		importCmd()
+	case "bl":
+		blCmd()
 	case "device-id", "id":
 		deviceIDCmd()
 	case "regenerate-id":

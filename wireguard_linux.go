@@ -438,6 +438,10 @@ func teardownTunnelRoutes() {
 		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(toCIDRRoute(ip))})
 	}
 	routedTurnIPs = nil
+	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+		_, dst, _ := net.ParseCIDR(cidr)
+		_ = netlink.RouteDel(&netlink.Route{Dst: dst})
+	}
 }
 
 func teardownWG() error {

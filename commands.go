@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal"
+	"golang.org/x/net/idna"
 	"qwdtt/internal/core"
 )
 
@@ -1509,6 +1511,57 @@ func killByPgrep(targetProfile string) {
 	}
 }
 
+// displayDomain returns the Unicode form of an IDN domain (xn--...) for
+// human-readable output. Non-IDN domains are returned unchanged; on error
+// the original domain is returned so listings never break.
+// This is a pure display helper — files keep their punycode form, since
+// DNS resolvers and tunnel backends require the ascii (xn--) variant.
+func displayDomain(d string) string {
+	if !strings.Contains(d, "xn--") {
+		return d
+	}
+	if u, err := idna.ToUnicode(d); err == nil && u != "" {
+		return u
+	}
+	return d
+}
+
+// formatDomainsInColumns lays domains out into a fixed number of columns
+// (column-major, like `ls`), each column padded to the longest domain. indent
+// prefixes every line; sep separates columns. Trailing whitespace is trimmed.
+func formatDomainsInColumns(domains []string, indent, sep string, cols int) string {
+	if len(domains) == 0 {
+		return ""
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	maxLen := 0
+	for _, d := range domains {
+		if len(d) > maxLen {
+			maxLen = len(d)
+		}
+	}
+	rows := (len(domains) + cols - 1) / cols
+	var sb strings.Builder
+	for r := 0; r < rows; r++ {
+		var line strings.Builder
+		line.WriteString(indent)
+		for c := 0; c < cols; c++ {
+			idx := r + c*rows
+			if idx >= len(domains) {
+				break
+			}
+			line.WriteString(fmt.Sprintf("%-*s", maxLen, domains[idx]))
+			if c < cols-1 {
+				line.WriteString(sep)
+			}
+		}
+		sb.WriteString(strings.TrimRight(line.String(), " ") + "\n")
+	}
+	return sb.String()
+}
+
 // printBlackList outputs the blacklist configuration for a running profile.
 // Reads domains from the raw -bl value and/or resolves domains from the -bl-file JSON.
 func printBlackList(d *ProfileDetails) {
@@ -1526,14 +1579,11 @@ func printBlackList(d *ProfileDetails) {
 	}
 	if len(blDomains) > 0 {
 		fmt.Printf("  Black list (%d):\n", len(blDomains))
-		for i, domain := range blDomains {
-			fmt.Printf("    %-25s", domain)
-			if (i+1)%3 == 0 || i == len(blDomains)-1 {
-				fmt.Println()
-			} else {
-				fmt.Print("  ")
-			}
+		displayed := make([]string, len(blDomains))
+		for i, d := range blDomains {
+			displayed[i] = displayDomain(d)
 		}
+		fmt.Print(formatDomainsInColumns(displayed, "    ", "  ", 3))
 	} else {
 		fmt.Printf("  Black list: (не настроен)\n")
 	}
@@ -1884,6 +1934,12 @@ func normalizeImportName(name string) string {
 }
 
 func loadImportEntries(path string) ([]importProfile, error) {
+	expanded, err := expandPath(path)
+	if err != nil {
+		return nil, err
+	}
+	path = expanded
+
 	lower := strings.ToLower(path)
 	isZipByExt := strings.HasSuffix(lower, ".zip")
 
@@ -1990,24 +2046,70 @@ func splitDomains(raw string) []string {
 	return out
 }
 
-// loadBypassRoutesFile reads a JSON file and extracts the bypassRoutes field.
-// All other fields in the JSON are ignored.
+// readBypassFile reads a bypass routes file, expanding '~'/'$VAR' in path.
+// Accepts a plain JSON file or a ZIP archive containing a JSON file with a
+// "bypassRoutes" field. Returns the raw JSON bytes and the resolved location
+// (file path, or "archive/entry.json" for zipped entries).
+func readBypassFile(path string) (data []byte, expanded string, err error) {
+	expanded, err = expandPath(path)
+	if err != nil {
+		return nil, "", err
+	}
+	lower := strings.ToLower(expanded)
+	if strings.HasSuffix(lower, ".zip") {
+		return loadBypassFromZip(expanded)
+	}
+	data, err = os.ReadFile(expanded)
+	if err != nil {
+		return nil, expanded, fmt.Errorf("не удалось прочитать файл %q: %w", expanded, err)
+	}
+	// ZIP magic bytes but a non-.zip extension — still try it as a zip.
+	if len(data) >= 2 && data[0] == 'P' && data[1] == 'K' {
+		return loadBypassFromZip(expanded)
+	}
+	return data, expanded, nil
+}
+
+// loadBypassFromZip opens a ZIP archive and returns the raw JSON of the first
+// entry whose parsed object contains a "bypassRoutes" field.
+func loadBypassFromZip(path string) ([]byte, string, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, path, fmt.Errorf("ошибка открытия ZIP %q: %w", path, err)
+	}
+	defer reader.Close()
+	for _, f := range reader.File {
+		if f.FileInfo().IsDir() || !strings.HasSuffix(strings.ToLower(filepath.Base(f.Name)), ".json") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		data, rerr := io.ReadAll(rc)
+		rc.Close()
+		if rerr != nil {
+			continue
+		}
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(data, &probe) == nil {
+			if _, ok := probe["bypassRoutes"]; ok {
+				return data, path + "/" + f.Name, nil
+			}
+		}
+	}
+	return nil, path, fmt.Errorf("в ZIP %q не найдено JSON с полем bypassRoutes; "+
+		"если это export профилей — используйте: qwdtt import %q", path, path)
+}
+
+// loadBypassRoutesFile reads a JSON file (or a ZIP containing such a JSON) and
+// extracts the bypassRoutes field. All other fields in the JSON are ignored.
 // bypassRoutes can be either a newline-separated string or an array of strings.
-// The path may contain a leading ~ which is expanded to $HOME.
 // Returns a deduplicated list of domain/IP/CIDR strings.
 func loadBypassRoutesFile(path string) ([]string, error) {
-	expanded := os.ExpandEnv(path)
-	if strings.HasPrefix(path, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("не удалось определить домашнюю директорию для ~ в пути %q: %w", path, err)
-		}
-		expanded = filepath.Join(home, path[1:])
-	}
-
-	data, err := os.ReadFile(expanded)
+	data, expanded, err := readBypassFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать файл %q: %w", expanded, err)
+		return nil, err
 	}
 
 	var raw struct {
@@ -2044,4 +2146,320 @@ func loadBypassRoutesFile(path string) ([]string, error) {
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+// expandPath expands a leading '~' to $HOME and resolves $ENV variables in the
+// given path. Returns an error if '~' is used but $HOME cannot be determined.
+func expandPath(path string) (string, error) {
+	expanded := os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("не удалось определить домашнюю директорию для ~ в пути %q: %w", path, err)
+		}
+		expanded = filepath.Join(home, path[1:])
+	}
+	return expanded, nil
+}
+
+// parseBypassRawRoutes extracts domains from the raw JSON value of the
+// "bypassRoutes" field. Supports both a JSON array of strings and a JSON
+// string of newline-separated values. Returns the domains and a flag
+// indicating whether the source was an array.
+func parseBypassRawRoutes(raw json.RawMessage) (domains []string, wasArray bool) {
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return arr, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		for _, d := range strings.Split(s, "\n") {
+			if d = strings.TrimSpace(d); d != "" {
+				domains = append(domains, d)
+			}
+		}
+		return domains, false
+	}
+	return nil, false
+}
+
+// loadBypassForEdit reads a bypass routes JSON file, returning the full raw
+// document (to preserve other fields), the list of domains parsed from the
+// "bypassRoutes" field, and whether the field was a JSON array.
+func loadBypassForEdit(path string) (raw map[string]json.RawMessage, domains []string, isArray bool, err error) {
+	data, expanded, err := readBypassFile(path)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var r map[string]json.RawMessage
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, nil, false, fmt.Errorf("не удалось распарсить JSON из %q: %w", expanded, err)
+	}
+	if br, ok := r["bypassRoutes"]; ok && len(br) > 0 {
+		domains, isArray = parseBypassRawRoutes(br)
+	}
+	return r, domains, isArray, nil
+}
+
+// saveBypassFile writes the bypass routes JSON file, preserving any existing
+// top-level fields (format, formatVersion, appVersion, etc.) and keeping the
+// bypassRoutes field in the same JSON type it had (string vs array). When
+// createNew is true and the document is empty, a default qwdtt-bypass header
+// is seeded.
+func saveBypassFile(path string, raw map[string]json.RawMessage, domains []string, isArray bool, createNew bool) error {
+	if createNew && len(raw) == 0 {
+		raw["format"] = json.RawMessage(`"qwdtt-bypass"`)
+		raw["formatVersion"] = json.RawMessage(`1`)
+		raw["appVersion"] = json.RawMessage(`"` + version + `"`)
+	}
+
+	if isArray {
+		b, err := json.Marshal(domains)
+		if err != nil {
+			return err
+		}
+		raw["bypassRoutes"] = b
+	} else {
+		b, err := json.Marshal(strings.Join(domains, "\n"))
+		if err != nil {
+			return err
+		}
+		raw["bypassRoutes"] = b
+	}
+
+	expanded, err := expandPath(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(strings.ToLower(expanded), ".zip") {
+		return fmt.Errorf("нельзя сохранять изменения в ZIP %q; распакуйте JSON с bypassRoutes в файл и редактируйте его", path)
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(expanded, data, 0o644)
+}
+
+func blCmd() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt bl <add|list|remove|find> -file PATH [domains...]\n")
+		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd)")
+		os.Exit(1)
+	}
+	sub := os.Args[2]
+
+	fs := flag.NewFlagSet("bl", flag.ExitOnError)
+	var file string
+	fs.StringVar(&file, "file", "", "Path to bypass routes JSON file (required)")
+	fs.StringVar(&file, "f", "", "Alias for -file")
+	yes := fs.Bool("y", false, "Skip confirmation prompt (remove only)")
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
+	fs.Parse(flagArgs)
+
+	if file == "" {
+		fmt.Fprintln(os.Stderr, "[ERROR] флаг -file обязателен")
+		os.Exit(1)
+	}
+
+	switch sub {
+	case "list", "ls":
+		if len(args) > 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] list не принимает позиционные аргументы: %v\n", args)
+			os.Exit(1)
+		}
+		blList(file)
+	case "add":
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl add <domain1> [domain2...] -file/-f PATH")
+			os.Exit(1)
+		}
+		blAdd(args, file)
+	case "remove", "rm":
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl remove <domain1> [domain2...] -file/-f PATH [-y]")
+			os.Exit(1)
+		}
+		blRemove(args, file, *yes)
+	case "find", "fd":
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl find <domain1> [domain2...] -file/-f PATH")
+			os.Exit(1)
+		}
+		blFind(args, file)
+	default:
+		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, list, remove, find\n", sub)
+		os.Exit(1)
+	}
+}
+
+func blList(file string) {
+	_, domains, _, err := loadBypassForEdit(file)
+	if err != nil {
+		log.Fatalf("Ошибка чтения %q: %v", file, err)
+	}
+	if len(domains) == 0 {
+		fmt.Printf("[*] В файле %q нет доменов\n", file)
+		return
+	}
+	sorted := append([]string(nil), domains...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return strings.ToLower(displayDomain(sorted[i])) < strings.ToLower(displayDomain(sorted[j]))
+	})
+	fmt.Printf("Всего: %d доменов в %q\n\n", len(sorted), file)
+	displayed := make([]string, len(sorted))
+	for i, d := range sorted {
+		displayed[i] = displayDomain(d)
+	}
+	fmt.Print(formatDomainsInColumns(displayed, "", "  ", 3))
+}
+
+func blAdd(domains []string, file string) {
+	raw, existing, isArray, err := loadBypassForEdit(file)
+	createNew := false
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Fatalf("Ошибка чтения %q: %v", file, err)
+		}
+		raw = map[string]json.RawMessage{}
+		existing = []string{}
+		isArray = false
+		createNew = true
+	}
+
+	seen := make(map[string]bool, len(existing))
+	for _, d := range existing {
+		seen[strings.ToLower(d)] = true
+	}
+
+	added := 0
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		key := strings.ToLower(d)
+		if seen[key] {
+			fmt.Fprintf(os.Stderr, "[INFO] уже есть: %s\n", d)
+			continue
+		}
+		seen[key] = true
+		existing = append(existing, d)
+		added++
+		fmt.Printf("[+] добавлен: %s\n", d)
+	}
+
+	if added == 0 {
+		fmt.Println("[*] Нечего добавлять — все домены уже присутствуют")
+		return
+	}
+
+	if err := saveBypassFile(file, raw, existing, isArray, createNew); err != nil {
+		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+	}
+	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(existing))
+}
+
+func blRemove(domains []string, file string, assumeYes bool) {
+	if !assumeYes {
+		fmt.Printf("Точно удалить %d домен(а/ов) из %q? [y/N] ", len(domains), file)
+		reader := bufio.NewReader(os.Stdin)
+		resp, _ := reader.ReadString('\n')
+		resp = strings.ToLower(strings.TrimSpace(resp))
+		if resp != "y" && resp != "yes" {
+			fmt.Println("[*] Отмена")
+			return
+		}
+	}
+
+	raw, existing, isArray, err := loadBypassForEdit(file)
+	if err != nil {
+		log.Fatalf("Ошибка чтения %q: %v", file, err)
+	}
+
+	existingSet := make(map[string]bool, len(existing))
+	for _, d := range existing {
+		existingSet[strings.ToLower(d)] = true
+	}
+
+	removeSet := make(map[string]bool)
+	var reported []string
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		kl := strings.ToLower(d)
+		if existingSet[kl] {
+			removeSet[kl] = true
+			reported = append(reported, d)
+		} else {
+			fmt.Fprintf(os.Stderr, "[INFO] не найден: %s\n", d)
+		}
+	}
+
+	if len(removeSet) == 0 {
+		fmt.Println("[*] Не удалено ни одного домена")
+		return
+	}
+
+	var out []string
+	for _, d := range existing {
+		if removeSet[strings.ToLower(d)] {
+			continue
+		}
+		out = append(out, d)
+	}
+
+	for _, d := range reported {
+		fmt.Printf("[-] удалён: %s\n", d)
+	}
+
+	if err := saveBypassFile(file, raw, out, isArray, false); err != nil {
+		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+	}
+	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(out))
+}
+
+func blFind(queries []string, file string) {
+	_, existing, _, err := loadBypassForEdit(file)
+	if err != nil {
+		log.Fatalf("Ошибка чтения %q: %v", file, err)
+	}
+	foundAny := false
+	for _, q := range queries {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		ql := strings.ToLower(q)
+		var exact, match []string
+		for _, d := range existing {
+			dl := strings.ToLower(d)
+			du := strings.ToLower(displayDomain(d))
+			// dr is the romanized form of the Unicode domain, so a Latin
+			// query (e.g. "vtb") also matches a Cyrillic domain
+			// (e.g. "втб.рф" => "vtb.rf").
+			dr := strings.ToLower(transliterateCyrillic(du))
+			if dl == ql || du == ql || dr == ql {
+				exact = append(exact, d)
+			} else if strings.Contains(dl, ql) || strings.Contains(du, ql) || strings.Contains(dr, ql) {
+				match = append(match, d)
+			}
+		}
+		if len(exact) == 0 && len(match) == 0 {
+			fmt.Printf("[NOTFOUND] %s\n", q)
+			continue
+		}
+		foundAny = true
+		for _, d := range exact {
+			fmt.Printf("[EXACT]   %s -> %s\n", q, displayDomain(d))
+		}
+		for _, d := range match {
+			fmt.Printf("[MATCH]   %s -> %s\n", q, displayDomain(d))
+		}
+	}
+	if !foundAny {
+		fmt.Println("[*] Ни одного совпадения не найдено")
+	}
 }

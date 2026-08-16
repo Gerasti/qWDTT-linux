@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove move list show share enable disable import device-id regenerate-id log test version help"
+        local commands="connect disconnect debug add edit remove move list show share enable disable import bl device-id regenerate-id log test version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -140,6 +140,24 @@ _qwdtt_completions() {
             ;;
         regenerate-id|version|help)
             # These commands don't take arguments
+            ;;
+        import)
+            if [[ $prev == "-dry-run" || $prev == "--dry-run" ]]; then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            elif [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "-dry-run --dry-run" -- "$cur") )
+            elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            fi
+            ;;
+        bl)
+            if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
+                COMPREPLY=( $(compgen -W "add list ls remove rm find fd" -- "$cur") )
+            elif [[ $prev == "-file" || $prev == "--file" ]]; then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            elif [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "-file --file -y" -- "$cur") )
+            fi
             ;;
     esac
 

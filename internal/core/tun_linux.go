@@ -259,6 +259,10 @@ func teardownRawMSSClampingNFT() {
 		Name:   nftTableName,
 	})
 	if err := c.Flush(); err != nil {
-		log.Printf("[CORE] nft teardown: %v", err)
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "no such file or directory") {
+			log.Printf("[CORE] nft teardown: table already gone (ok)")
+		} else {
+			log.Printf("[CORE] nft teardown: %v", err)
+		}
 	}
 }

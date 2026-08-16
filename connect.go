@@ -662,6 +662,8 @@ func tryConnectProfile(
 			}
 			return false, false, false
 		case <-stopCh:
+			c.Stop()
+			teardownMode()
 			if !skipActiveProfileClear {
 				notifyDisconnectedSync(profileName, mode)
 				clearActiveProfile()
