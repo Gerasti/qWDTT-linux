@@ -247,6 +247,12 @@ qwdtt test 'wdtt_*'                  - Протестировать все пр�
 # ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
 # (в fish ошибка "No matches for wildcard" — это ошибка шелла, решается кавычками)
 qwdtt import <file.json|file.zip> [--dry-run] - Импортировать профили из JSON или ZIP (--dry-run: просмотр без сохранения)
+qwdtt subscription <add|remove|show|update> [флаги] - Управление подписками (alias: sub)
+  add <url>                    - Добавить подписку (имя берётся из JSON subscriptionName)
+  add <name> <url>             - Добавить подписку с явным именем
+  remove <name> [-y]           - Удалить подписку и все её профили (alias: rm)
+  show [<name>]                - Показать подписку или список всех (alias: sh)
+  update [<name>] [-y]         - Обновить профили из подписки (перезаписывает все профили)
 qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
 qwdtt regenerate-id                  - Перегенерировать Device ID
 qwdtt version                        - Версия
@@ -265,6 +271,7 @@ id     - device-id
 en     - enable
 dis    - disable
 deb    - debug
+sub    - subscription
 ```
 
 ## Флаги connect
@@ -394,8 +401,79 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 - Нельзя редактировать или удалить через CLI
 - Можно включать/отключать: `qwdtt enable ro-work`
 - С флагом `-ro` можно включать/отключать все read-only профили сразу: `qwdtt enable -ro`, `qwdtt disable -ro`
-- Поддержка sops-nix для секретов (device_id, wdtt:// ссылки)
-- Автоматически создаются для указанных пользователей
+  - Поддержка sops-nix для секретов (device_id, wdtt:// ссылки)
+  - Автоматически создаются для указанных пользователей
+
+## Подписки (Subscriptions)
+
+Подписки позволяют получать и автоматически обновлять наборы профилей с HTTPS-сервера.
+
+### Формат JSON подписки
+
+```json
+{
+  "subscriptionName": "DarkBit VPN",
+  "description": "Подписка · до 24.08.2026",
+  "profiles": [
+    {
+      "name": "Германия",
+      "peer": "144.31.223.80:56000",
+      "password": "wiGm3McD5R",
+      "hashes": "vk_hash_1,vk_hash_2",
+      "workersPerHash": 16,
+      "listenPort": 9000
+    }
+  ]
+}
+```
+
+Поддерживаются алиасы: `groupName` вместо `subscriptionName`, `servers` вместо `profiles`,
+`vkHashes` вместо `hashes`, `workersPerHash` вместо `workers`, `listenPort` вместо `port`,
+`pass` вместо `password`. Ответ может быть JSON или Base64 с JSON внутри.
+
+### Команды
+
+| Команда | Описание |
+|---------|----------|
+| `qwdtt sub add <url>` | Добавить подписку (имя из `subscriptionName` в JSON) |
+| `qwdtt sub add <name> <url>` | Добавить подписку с явным именем |
+| `qwdtt sub show [<name>]` | Показать подписку или список всех |
+| `qwdtt sub update [<name>]` | Обновить профили из подписки (заменяет все профили) |
+| `qwdtt sub upd [<name>]` | alias для update |
+| `qwdtt sub rm <name>` | Удалить подписку и все её профили |
+
+Флаги: `-y` / `-yes` — пропустить подтверждение.
+
+### Ограничения подписок
+
+- Профили из подписки создаются как обычные профили, но находятся в группе с именем подписки
+- Группу подписки **нельзя** удалить из профиля (`edit -groups` заблокирован)
+- В группу подписки **нельзя** добавить другие профили
+- Профили подписки нельзя удалить через `qwdtt rm` — используйте `qwdtt sub rm`
+- `qwdtt sub update` **заменяет** все профили подписки (удаляет старые, создаёт новые)
+- НестSubscription-флаги (`edit -priority`, `-peer`, `-workers` и т.д.) работают как обычно
+
+### Примеры
+
+```bash
+# Добавить подписку (имя из JSON)
+qwdtt sub add https://example.com/sub.json -y
+
+# Добавить подписку с явным именем
+qwdtt sub add "My VPN" "https://example.com/sub.json"
+
+# Показать все подписки
+qwdtt sub show
+
+# Обновить конкретную подписку
+qwdtt sub update "DarkBit VPN"
+
+# Обновить все подписки
+qwdtt sub update
+
+# Удалить подписку и все её профили
+qwdtt sub rm "DarkBit VPN" -y
+```
 
 ## DNS Resolvers
 
@@ -440,6 +518,7 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 ├── notify.go             # D-Bus уведомления
 ├── captcha_socket.go     # Сокет для капчи
 ├── profile.go            # Работа с профилями
+├── subscription.go       # Управление подписками (HTTPS JSON)
 ├── suspend.go            # Мониторинг suspend/resume
 ├── test.go               # Команда test (VKAuth, Workers, Connect, InternetCheck)
 ├── url_parser.go         # Парсинг wdtt:// URL

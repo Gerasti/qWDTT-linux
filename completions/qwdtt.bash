@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove move list show share enable disable import bl device-id regenerate-id log test version help"
+        local commands="connect disconnect debug add edit remove move list show share enable disable import bl device-id regenerate-id log test subscription version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -42,6 +42,7 @@ _qwdtt_completions() {
         id) cmd="device-id" ;;
         lg) cmd="log" ;;
         deb) cmd="debug" ;;
+        sub) cmd="subscription" ;;
     esac
 
     # Complete profile names for commands that need them
@@ -68,7 +69,7 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-group --group" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-group --group -sub" -- "$cur") )
             elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
@@ -112,7 +113,7 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-ro -group --group" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -sub -group --group" -- "$cur") )
             elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
                 local disabled_profiles=$(qwdtt __complete_disabled 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$disabled_profiles" -- "$cur") )
@@ -123,7 +124,7 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-ro -group --group" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -sub -group --group" -- "$cur") )
             elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
                 local enabled_profiles=$(qwdtt __complete_enabled 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$enabled_profiles" -- "$cur") )
@@ -137,7 +138,7 @@ _qwdtt_completions() {
                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group --group -timeout -mode -socks-port -socks-user -socks-password" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group --group -sub -timeout -mode -socks-port -socks-user -socks-password" -- "$cur") )
              elif [[ $prev == "-mode" ]]; then
                 COMPREPLY=( $(compgen -W "tun socks raw" -- "$cur") )
             fi
@@ -156,7 +157,7 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-en -enabled -dis -disabled -ro -active" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-en -enabled -dis -disabled -ro -sub -active" -- "$cur") )
             fi
             ;;
         regenerate-id|version|help)
@@ -171,13 +172,29 @@ _qwdtt_completions() {
                 COMPREPLY=( $(compgen -f -- "$cur") )
             fi
             ;;
-        bl)
+         bl)
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
                 COMPREPLY=( $(compgen -W "add list ls remove rm find fd" -- "$cur") )
             elif [[ $prev == "-file" || $prev == "--file" ]]; then
                 COMPREPLY=( $(compgen -f -- "$cur") )
             elif [[ $cur == -* ]]; then
                 COMPREPLY=( $(compgen -W "-file --file -y" -- "$cur") )
+            fi
+            ;;
+        subscription|sub)
+            if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
+                COMPREPLY=( $(compgen -W "add remove rm show sh move mv update upd" -- "$cur") )
+            elif [[ $COMP_CWORD -eq 3 && $cur != -* ]]; then
+                case "${COMP_WORDS[2]}" in
+                    add)
+                        COMPREPLY=( $(compgen -f -- "$cur") )
+                        ;;
+                    remove|rm|show|sh|update|upd|move|mv)
+                        COMPREPLY=( $(compgen -W "$(qwdtt __complete_subscriptions 2>/dev/null)" -- "$cur") )
+                        ;;
+                esac
+            elif [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "-y -yes" -- "$cur") )
             fi
             ;;
     esac

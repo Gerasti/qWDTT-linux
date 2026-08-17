@@ -264,19 +264,37 @@ func editCmd() {
 	}
 
 		if groupsChanged {
+			if prof.Subscription != "" {
+				fmt.Fprintf(os.Stderr, "[ERROR] %s: нельзя изменить группы профиля управляемого подпиской '%s'\n", name, prof.Subscription)
+				hadErrors = true
+				continue
+			}
+
 			val := strings.TrimSpace(*groups)
 			if val == "" || val == "none" {
 				prof.Groups = nil
 				changed = true
 				fmt.Printf("[*] %s: Группы очищены\n", name)
 			} else {
-				prof.Groups = nil
+				var newGroups []string
+				var blocked []string
 				for _, g := range strings.Split(val, ",") {
 					g = strings.TrimSpace(g)
-					if g != "" && g != "none" {
-						prof.Groups = append(prof.Groups, g)
+					if g == "" || g == "none" {
+						continue
 					}
+					if isSubscriptionName(g) {
+						blocked = append(blocked, g)
+						continue
+					}
+					newGroups = append(newGroups, g)
 				}
+				if len(blocked) > 0 {
+					fmt.Fprintf(os.Stderr, "[ERROR] %s: нельзя добавить профиль в групп(у/и) подписки: %s\n", name, strings.Join(blocked, ", "))
+					hadErrors = true
+					continue
+				}
+				prof.Groups = newGroups
 				changed = true
 				fmt.Printf("[*] %s: Группы изменены: %v\n", name, prof.Groups)
 			}
@@ -310,8 +328,35 @@ func removeCmd() {
 	fs.Parse(flagArgs)
 
 	names = collectTargets(*group, names)
+
+	// Pre-filter: block subscription-managed and read-only profiles before
+	// showing the confirmation prompt.
+	var filterErrors bool
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if strings.HasPrefix(name, "ro-") {
+			fmt.Fprintf(os.Stderr, "[ERROR] Cannot remove read-only profile '%s'. Read-only profiles are managed by system configuration.\n", name)
+			filterErrors = true
+			continue
+		}
+		if prof, err := loadProfile(name); err == nil && prof.Subscription != "" {
+			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' управляется подпиской '%s'. Используйте: qwdtt sub remove %s\n", name, prof.Subscription, prof.Subscription)
+			filterErrors = true
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	names = filtered
+
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt remove <name1> [name2] ... [-group GROUP] [-y]\n")
+		if len(os.Args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: qwdtt remove <name1> [name2] ... [-group GROUP] [-y]\n")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "[ERROR] Нет профилей для удаления")
+		if filterErrors {
+			os.Exit(1)
+		}
 		os.Exit(1)
 	}
 
@@ -334,12 +379,6 @@ func removeCmd() {
 
 	var hadErrors bool
 	for _, name := range names {
-		if strings.HasPrefix(name, "ro-") {
-			fmt.Fprintf(os.Stderr, "[ERROR] Cannot remove read-only profile '%s'. Read-only profiles are managed by system configuration.\n", name)
-			hadErrors = true
-			continue
-		}
-
 		if err := os.Remove(profilePath(name)); err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
 			hadErrors = true
@@ -377,6 +416,11 @@ func moveCmd() {
 		os.Exit(1)
 	}
 
+	if prof, err := loadProfile(oldName); err == nil && prof.Subscription != "" {
+		fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' управляется подпиской '%s'. Переименование недоступно.\n", oldName, prof.Subscription)
+		os.Exit(1)
+	}
+
 	if _, err := os.Stat(profilePath(oldName)); err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Profile %q not found\n", oldName)
 		os.Exit(1)
@@ -401,23 +445,25 @@ func moveCmd() {
 }
 
 func listCmd() {
-	type profileInfo struct {
-		name      string
-		peer      string
-		hashes    int
-		status    string
-		priority  int
-		groups    []string
-		active    bool
-		mode      string // "tun" or "socks" (only set if active)
-		socksPort int    // SOCKS5 port (only set if active)
-		readOnly  bool
+ 	type profileInfo struct {
+ 		name        string
+ 		peer        string
+ 		hashes      int
+ 		status      string
+ 		priority    int
+ 		groups      []string
+ 		active      bool
+ 		mode        string // "tun" or "socks" (only set if active)
+ 		socksPort   int    // SOCKS5 port (only set if active)
+ 		readOnly    bool
+ 		subscription string // subscription name if managed, "" otherwise
 	}
 
-	var regularProfiles []profileInfo
-	var readOnlyProfiles []profileInfo
-	maxNameLen := 0
-	maxPeerLen := 0
+ 	var regularProfiles []profileInfo
+ 	var readOnlyProfiles []profileInfo
+ 	var subscriptionProfiles []profileInfo
+ 	maxNameLen := 0
+ 	maxPeerLen := 0
 
 	// ANSI color codes
 	const (
@@ -467,24 +513,27 @@ func listCmd() {
 				socksPort = d.SocksPort
 			}
 
-			info := profileInfo{
-				name:      name,
-				peer:      prof.PeerAddr,
-				hashes:    len(prof.Hashes),
-				status:    status,
-				priority:  prof.Priority,
-				groups:    prof.Groups,
-				active:    active,
-				mode:      mode,
-				socksPort: socksPort,
-				readOnly:  isReadOnly,
-			}
+ 			info := profileInfo{
+ 				name:        name,
+ 				peer:        prof.PeerAddr,
+ 				hashes:      len(prof.Hashes),
+ 				status:      status,
+ 				priority:    prof.Priority,
+ 				groups:      prof.Groups,
+ 				active:      active,
+ 				mode:        mode,
+ 				socksPort:   socksPort,
+ 				readOnly:    isReadOnly,
+ 				subscription: prof.Subscription,
+ 			}
 
-			if isReadOnly {
-				readOnlyProfiles = append(readOnlyProfiles, info)
-			} else {
-				regularProfiles = append(regularProfiles, info)
-			}
+  			if isReadOnly {
+ 				readOnlyProfiles = append(readOnlyProfiles, info)
+ 			} else if prof.Subscription != "" {
+ 				subscriptionProfiles = append(subscriptionProfiles, info)
+ 			} else {
+ 				regularProfiles = append(regularProfiles, info)
+ 			}
 
 			if len(name) > maxNameLen {
 				maxNameLen = len(name)
@@ -507,9 +556,10 @@ func listCmd() {
 	enabled := fs.Bool("enabled", false, "Show only enabled profiles")
 	dis := fs.Bool("dis", false, "Show only disabled profiles")
 	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
-	ro := fs.Bool("ro", false, "Show only read-only profiles")
-	active := fs.Bool("active", false, "Show only running profiles")
-	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
+ 	ro := fs.Bool("ro", false, "Show only read-only profiles")
+ 	active := fs.Bool("active", false, "Show only running profiles")
+ 	sub := fs.Bool("sub", false, "Show only profiles managed by any subscription")
+ 	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
 	showEnabled := *en || *enabled
@@ -536,43 +586,63 @@ func listCmd() {
 			return filtered
 		}
 		regularProfiles = filterByGroups(regularProfiles)
-		readOnlyProfiles = filterByGroups(readOnlyProfiles)
-	}
+  		readOnlyProfiles = filterByGroups(readOnlyProfiles)
+  		subscriptionProfiles = filterByGroups(subscriptionProfiles)
+  	}
 
-	// Filter by enabled/disabled status
-	if showEnabled || showDisabled {
-		filterByStatus := func(src []profileInfo) []profileInfo {
-			var filtered []profileInfo
-			for _, p := range src {
-				if (showEnabled && p.status == "enabled") || (showDisabled && p.status == "disabled") {
-					filtered = append(filtered, p)
-				}
-			}
-			return filtered
-		}
-		regularProfiles = filterByStatus(regularProfiles)
-		readOnlyProfiles = filterByStatus(readOnlyProfiles)
-	}
+  	// Filter by enabled/disabled status
+  	if showEnabled || showDisabled {
+  		filterByStatus := func(src []profileInfo) []profileInfo {
+  			var filtered []profileInfo
+  			for _, p := range src {
+  				if (showEnabled && p.status == "enabled") || (showDisabled && p.status == "disabled") {
+  					filtered = append(filtered, p)
+  				}
+  			}
+  			return filtered
+  		}
+  		regularProfiles = filterByStatus(regularProfiles)
+  		readOnlyProfiles = filterByStatus(readOnlyProfiles)
+  		subscriptionProfiles = filterByStatus(subscriptionProfiles)
+  	}
 
-	// Filter: -ro shows only read-only profiles
-	if *ro {
-		regularProfiles = nil
-	}
+  	// Filter: -ro shows only read-only profiles
+  	if *ro {
+  		regularProfiles = nil
+  		subscriptionProfiles = nil
+  	}
 
-	// Filter: -active shows only running profiles
-	if *active {
-		filterActive := func(src []profileInfo) []profileInfo {
-			var filtered []profileInfo
-			for _, p := range src {
-				if p.active {
-					filtered = append(filtered, p)
-				}
-			}
-			return filtered
-		}
-		regularProfiles = filterActive(regularProfiles)
-		readOnlyProfiles = filterActive(readOnlyProfiles)
-	}
+  	// Filter: -sub shows only profiles managed by any subscription
+  	if *sub {
+  		filterBySub := func(src []profileInfo) []profileInfo {
+  			var filtered []profileInfo
+  			for _, p := range src {
+  				if p.subscription != "" {
+  					filtered = append(filtered, p)
+  				}
+  			}
+  			return filtered
+  		}
+  		regularProfiles = nil
+  		readOnlyProfiles = nil
+  		subscriptionProfiles = filterBySub(subscriptionProfiles)
+  	}
+
+  	// Filter: -active shows only running profiles
+ 	if *active {
+ 		filterActive := func(src []profileInfo) []profileInfo {
+ 			var filtered []profileInfo
+ 			for _, p := range src {
+ 				if p.active {
+ 					filtered = append(filtered, p)
+ 				}
+ 			}
+ 			return filtered
+ 		}
+ 		regularProfiles = filterActive(regularProfiles)
+ 		readOnlyProfiles = filterActive(readOnlyProfiles)
+ 		subscriptionProfiles = filterActive(subscriptionProfiles)
+ 	}
 
 	// Sort profiles by priority (highest first), then by name
 	sortProfilesByPriority := func(profiles []profileInfo) {
@@ -584,9 +654,10 @@ func listCmd() {
 		})
 	}
 	sortProfilesByPriority(regularProfiles)
-	sortProfilesByPriority(readOnlyProfiles)
+ 	sortProfilesByPriority(readOnlyProfiles)
+ 	sortProfilesByPriority(subscriptionProfiles)
 
-	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 {
+ 	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 && len(subscriptionProfiles) == 0 {
 		var conditions []string
 		if showEnabled {
 			conditions = append(conditions, "включённых")
@@ -677,10 +748,10 @@ func listCmd() {
 				}
 			}
 
-			groupsStr := ""
-			if len(p.groups) > 0 {
-				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
-			}
+ 			groupsStr := ""
+ 			if len(p.groups) > 0 {
+ 				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
+ 			}
 
 			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s%s\n",
 				activeMarker,
@@ -695,8 +766,9 @@ func listCmd() {
 		}
 	}
 
-	printProfiles(regularProfiles, "Профили")
-	printProfiles(readOnlyProfiles, "Read-only профили")
+ 	printProfiles(regularProfiles, "Профили")
+ 	printProfiles(subscriptionProfiles, "Подписки")
+ 	printProfiles(readOnlyProfiles, "Read-only профили")
 
 	// Show autoswitch status with mode info
 	if d, ok := runningDetails["autoswitch"]; ok {
@@ -740,12 +812,21 @@ func listCmd() {
 func showCmd() {
 	fs := flag.NewFlagSet("show", flag.ExitOnError)
 	group := fs.String("group", "", "Operate on all profiles in this group")
+	sub := fs.Bool("sub", false, "Show all profiles managed by any subscription")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
+	if *sub && *group == "" && len(names) == 0 {
+		names = profilesInAllSubscriptions()
+		if len(names) == 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] нет профилей, управляемых подписками\n")
+			os.Exit(1)
+		}
+	}
+
 	names = collectTargets(*group, names)
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt show <name1> [name2] ... [-group GROUP]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt show <name1> [name2] ... [-group GROUP] [-sub]\n")
 		os.Exit(1)
 	}
 
@@ -787,6 +868,9 @@ func showCmd() {
 		fmt.Printf("  Priority: %d\n", prof.Priority)
 		if len(prof.Groups) > 0 {
 			fmt.Printf("  Groups: %s\n", strings.Join(prof.Groups, ", "))
+		}
+		if prof.Subscription != "" {
+			fmt.Printf("  Подписка: %s (группы нельзя изменить)\n", prof.Subscription)
 		}
 
 		details := getRunningProfileDetails()
@@ -840,11 +924,20 @@ func enableCmd() {
 	fs := flag.NewFlagSet("enable", flag.ExitOnError)
 	group := fs.String("group", "", "Operate on all profiles in this group")
 	ro := fs.Bool("ro", false, "Only operate on read-only profiles")
+	sub := fs.Bool("sub", false, "Operate on all profiles managed by any subscription")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
-	if *ro && len(names) == 0 && *group == "" {
+	if *ro && len(names) == 0 && *group == "" && !*sub {
 		names = listReadOnlyProfileNames()
+	}
+
+	if *sub && len(names) == 0 && *group == "" {
+		names = profilesInAllSubscriptions()
+		if len(names) == 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] нет профилей, управляемых подписками\n")
+			os.Exit(1)
+		}
 	}
 
 	names = collectTargets(*group, names)
@@ -858,8 +951,18 @@ func enableCmd() {
 		}
 	}
 
+	if *sub && len(names) > 0 {
+		for _, name := range names {
+			prof, err := loadProfile(name)
+			if err != nil || prof.Subscription == "" {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не управляется подпиской\n", name)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name1> [name2] ... [-group GROUP] [-ro]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name1> [name2] ... [-group GROUP] [-ro] [-sub]\n")
 		os.Exit(1)
 	}
 
@@ -895,11 +998,20 @@ func disableCmd() {
 	fs := flag.NewFlagSet("disable", flag.ExitOnError)
 	group := fs.String("group", "", "Operate on all profiles in this group")
 	ro := fs.Bool("ro", false, "Only operate on read-only profiles")
+	sub := fs.Bool("sub", false, "Operate on all profiles managed by any subscription")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
-	if *ro && len(names) == 0 && *group == "" {
+	if *ro && len(names) == 0 && *group == "" && !*sub {
 		names = listReadOnlyProfileNames()
+	}
+
+	if *sub && len(names) == 0 && *group == "" {
+		names = profilesInAllSubscriptions()
+		if len(names) == 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] нет профилей, управляемых подписками\n")
+			os.Exit(1)
+		}
 	}
 
 	names = collectTargets(*group, names)
@@ -913,8 +1025,18 @@ func disableCmd() {
 		}
 	}
 
+	if *sub && len(names) > 0 {
+		for _, name := range names {
+			prof, err := loadProfile(name)
+			if err != nil || prof.Subscription == "" {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не управляется подпиской\n", name)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name1> [name2] ... [-group GROUP] [-ro]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name1> [name2] ... [-group GROUP] [-ro] [-sub]\n")
 		os.Exit(1)
 	}
 
@@ -2077,9 +2199,20 @@ func printDryRun(rows []dryRunRow) {
 }
 
 func normalizeImportName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	name = strings.ReplaceAll(name, " ", "_")
-	return name
+	name = strings.TrimSpace(name)
+	name = transliterateCyrillic(name)
+	name = strings.ToLower(name)
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else if r == ' ' {
+			b.WriteRune('_')
+		} else if r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func loadImportEntries(path string) ([]importProfile, error) {
@@ -2611,4 +2744,473 @@ func blFind(queries []string, file string) {
 	if !foundAny {
 		fmt.Println("[*] Ни одного совпадения не найдено")
 	}
+}
+
+func subscriptionCmd() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt subscription <add|remove|show|update> [options]\n")
+		fmt.Fprintln(os.Stderr, "(alias: qwdtt sub)")
+		os.Exit(1)
+	}
+
+ 	sub := os.Args[2]
+ 	switch sub {
+ 	case "add":
+ 		subscriptionAddCmd()
+ 	case "remove", "rm":
+ 		subscriptionRemoveCmd()
+ 	case "show", "sh":
+ 		subscriptionShowCmd()
+ 	case "move", "mv":
+ 		subscriptionMoveCmd()
+     case "update", "upd":
+         subscriptionUpdateCmd()
+ 	default:
+ 		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, remove (rm), show (sh), move (mv), update\n", sub)
+ 		os.Exit(1)
+ 	}
+}
+
+func subscriptionAddCmd() {
+	fs := flag.NewFlagSet("subscription add", flag.ExitOnError)
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
+	fs.Parse(flagArgs)
+
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub add <url> [-y]\n")
+		fmt.Fprintf(os.Stderr, "       qwdtt sub add <name> <url> [-y]\n")
+		fmt.Fprintf(os.Stderr, "  <name> — имя подписки (также название группы). Если не указано, берётся из JSON.\n")
+		fmt.Fprintf(os.Stderr, "  <url>  — http(s):// ссылка на JSON подписки или Base64 с JSON\n")
+		os.Exit(1)
+	}
+
+	var name, url string
+	if len(args) == 1 {
+		url = args[0]
+	} else {
+		name = args[0]
+		url = args[1]
+	}
+
+	if name == "" {
+		// Name from JSON — need to fetch first, then derive name
+		data, err := fetchSubscriptionJSON(url)
+		if err != nil {
+			log.Fatalf("Ошибка получения подписки: %v", err)
+		}
+
+		parsed, err := parseSubscriptionJSON(data)
+		if err != nil {
+			log.Fatalf("Ошибка парсинга JSON: %v", err)
+		}
+
+		name = parsed.SubscriptionName
+		if name == "" {
+			log.Fatal("Ошибка: subscriptionName не найден в JSON. Укажите имя явно: qwdtt sub add <name> <url>")
+		}
+
+		fmt.Printf("[*] Подписка: %s\n", name)
+		fmt.Printf("[*] URL: %s\n", url)
+		fmt.Printf("[*] Профилей: %d\n", len(parsed.Profiles))
+
+		if _, err := loadSubscription(name); err == nil {
+			if !*yes {
+				fmt.Printf("Подписка '%s' уже существует. Обновить? [y/N]: ", name)
+				var answer string
+				if _, err := fmt.Scanf("%s", &answer); err != nil {
+					answer = ""
+				}
+				answer = strings.ToLower(strings.TrimSpace(answer))
+				if answer != "y" && answer != "yes" {
+					fmt.Println("[OK] Отменено")
+					return
+				}
+			}
+		} else {
+			if !*yes {
+				fmt.Printf("Добавить подписку '%s'? [y/N]: ", name)
+				var answer string
+				if _, err := fmt.Scanf("%s", &answer); err != nil {
+					answer = ""
+				}
+				answer = strings.ToLower(strings.TrimSpace(answer))
+				if answer != "y" && answer != "yes" {
+					fmt.Println("[OK] Отменено")
+					return
+				}
+			}
+		}
+
+		created, removed, err := applySubscription(name, url)
+		if err != nil {
+			log.Fatalf("Ошибка: %v", err)
+		}
+
+		printSubscriptionOpResult(name, url, created, removed, nil)
+		return
+	}
+
+	// Explicit name — check if subscription already exists
+	if existing, err := loadSubscription(name); err == nil {
+		fmt.Printf("[*] Подписка '%s' уже существует (URL: %s)\n", name, existing.URL)
+		if existing.URL == url {
+			fmt.Println("[*] URL совпадает")
+		} else {
+			fmt.Printf("[*] URL изменён: %s → %s\n", existing.URL, url)
+		}
+		if !*yes {
+			fmt.Printf("Обновить подписку '%s'? [y/N]: ", name)
+			var answer string
+			if _, err := fmt.Scanf("%s", &answer); err != nil {
+				answer = ""
+			}
+			answer = strings.ToLower(strings.TrimSpace(answer))
+			if answer != "y" && answer != "yes" {
+				fmt.Println("[OK] Отменено")
+				return
+			}
+		}
+	}
+
+	created, removed, err := applySubscription(name, url)
+	if err != nil {
+		log.Fatalf("Ошибка: %v", err)
+	}
+
+	printSubscriptionOpResult(name, url, created, removed, nil)
+}
+
+func subscriptionRemoveCmd() {
+	fs := flag.NewFlagSet("subscription remove", flag.ExitOnError)
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
+	fs.Parse(flagArgs)
+
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub rm <name> [-y]\n")
+		fmt.Fprintf(os.Stderr, "  name — имя подписки (и группы профилей)\n")
+		os.Exit(1)
+	}
+
+	name := args[0]
+
+	sub, err := loadSubscription(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' не найдена\n", name)
+		fmt.Fprintf(os.Stderr, "Доступные подписки: %s\n", strings.Join(listSubscriptions(), ", "))
+		os.Exit(1)
+	}
+
+	fmt.Printf("Удалить подписку '%s' и %d профилей?\n", name, len(sub.Profiles))
+	for _, p := range sub.Profiles {
+		fmt.Printf("  - %s\n", p)
+	}
+
+	if !*yes {
+		fmt.Print("Продолжить? [y/N]: ")
+		var answer string
+		if _, err := fmt.Scanf("%s", &answer); err != nil {
+			answer = ""
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Println("[OK] Отменено")
+			return
+		}
+	}
+
+	var deleted int
+	for _, p := range sub.Profiles {
+		if err := os.Remove(profilePath(p)); err != nil {
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "[WARNING] Не удалось удалить профиль '%s': %v\n", p, err)
+			}
+			continue
+		}
+		deleted++
+	}
+
+	if err := os.Remove(subscriptionPath(name)); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось удалить конфиг подписки: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Подписка '%s' удалена (%d профилей удалено)\n", name, deleted)
+}
+
+func subscriptionMoveCmd() {
+	var oldName, newName string
+	args := os.Args[3:]
+	if len(args) == 2 {
+		oldName = args[0]
+		newName = args[1]
+	} else if len(args) == 1 {
+		fs := flag.NewFlagSet("subscription move", flag.ExitOnError)
+		yes := fs.Bool("y", false, "Skip confirmation prompt")
+		fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+		flagArgs, positional := splitFlagsAndArgs(fs, os.Args[3:])
+		fs.Parse(flagArgs)
+		if len(positional) != 2 {
+			fmt.Fprintf(os.Stderr, "Usage: qwdtt sub mv <old_name> <new_name> [-y]\n")
+			os.Exit(1)
+		}
+		oldName = positional[0]
+		newName = positional[1]
+		_ = yes
+	} else {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub mv <old_name> <new_name> [-y]\n")
+		os.Exit(1)
+	}
+
+	if oldName == newName {
+		fmt.Fprintf(os.Stderr, "[ERROR] Old and new names are the same\n")
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(subscriptionPath(oldName)); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' не найдена\n", oldName)
+		fmt.Fprintf(os.Stderr, "Доступные подписки: %s\n", strings.Join(listSubscriptions(), ", "))
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(subscriptionPath(newName)); err == nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' уже существует\n", newName)
+		os.Exit(1)
+	}
+
+	if isSubscriptionName(newName) {
+		fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' уже существует\n", newName)
+		os.Exit(1)
+	}
+
+	sub, err := loadSubscription(oldName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось загрузить подписку '%s': %v\n", oldName, err)
+		os.Exit(1)
+	}
+
+	sub.SubscriptionName = newName
+
+	if err := os.MkdirAll(subscriptionDir(), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось создать директорию подписок: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := saveSubscription(newName, sub); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось сохранить подписку '%s': %v\n", newName, err)
+		os.Exit(1)
+	}
+
+	if err := os.Remove(subscriptionPath(oldName)); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось удалить старую подписку '%s': %v\n", oldName, err)
+		os.Exit(1)
+	}
+
+	for _, profileName := range sub.Profiles {
+		prof, err := loadProfile(profileName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Не удалось обновить профиль '%s': %v\n", profileName, err)
+			continue
+		}
+		prof.Subscription = newName
+		for i, g := range prof.Groups {
+			if g == oldName {
+				prof.Groups[i] = newName
+			}
+		}
+		if err := saveProfile(profileName, *prof); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Не удалось сохранить профиль '%s': %v\n", profileName, err)
+		}
+	}
+
+	fmt.Printf("[OK] Подписка '%s' переименована в '%s'\n", oldName, newName)
+}
+
+func subscriptionShowCmd() {
+	var name string
+	args := os.Args[3:]
+	if len(args) > 0 {
+		name = args[0]
+	}
+
+	if name == "" {
+		subs := listSubscriptions()
+		if len(subs) == 0 {
+			fmt.Println("Нет подписок")
+			return
+		}
+		fmt.Println("Подписки:")
+		for _, s := range subs {
+			sub, err := loadSubscription(s)
+			if err != nil {
+				fmt.Printf("  %s [ошибка чтения]\n\n", s)
+				continue
+			}
+			fmt.Printf("  %s\n", s)
+			fmt.Printf("    Профилей: %d\n", len(sub.Profiles))
+			if sub.LastFetch != "" {
+				fmt.Printf("    Обновлено: %s\n", sub.LastFetch)
+			}
+			fmt.Printf("    URL:\n")
+			fmt.Printf("      %s\n", sub.URL)
+			fmt.Println()
+		}
+		return
+	}
+
+	sub, err := loadSubscription(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' не найдена\n", name)
+		fmt.Fprintf(os.Stderr, "Доступные подписки: %s\n", strings.Join(listSubscriptions(), ", "))
+		os.Exit(1)
+	}
+
+	fmt.Printf("Подписка: %s\n", sub.SubscriptionName)
+	if sub.Description != "" {
+		fmt.Printf("  Описание: %s\n", sub.Description)
+	}
+	if sub.TrafficUsedMb > 0 || sub.TrafficLimitMb > 0 {
+		fmt.Printf("  Трафик: %.1f / %.1f MB\n", sub.TrafficUsedMb, sub.TrafficLimitMb)
+	}
+	if sub.UpdatedAt != "" {
+		fmt.Printf("  Обновлено: %s\n", sub.UpdatedAt)
+	}
+	if sub.Version > 0 {
+		fmt.Printf("  Версия: %d\n", sub.Version)
+	}
+	if sub.LastFetch != "" {
+		fmt.Printf("  Последний fetch: %s\n", sub.LastFetch)
+	}
+	fmt.Printf("  Управляемых профилей: %d\n", len(sub.Profiles))
+
+	if len(sub.Profiles) > 0 {
+		fmt.Printf("\n  Профили:\n")
+		maxLen := 0
+		maxNumWidth := 0
+		for _, p := range sub.Profiles {
+			if len(p) > maxLen {
+				maxLen = len(p)
+			}
+		}
+		maxNumWidth = len(strconv.Itoa(len(sub.Profiles)))
+		for i, p := range sub.Profiles {
+			prof, err := loadProfile(p)
+			num := i + 1
+			if err != nil {
+				fmt.Printf("    %*d. %-*s [не найден]\n", maxNumWidth, num, maxLen, p)
+				continue
+			}
+			enabled := isProfileEnabled(p)
+			status := "✓"
+			if !enabled {
+				status = "✗"
+			}
+			fmt.Printf("    %*d. %-*s [%s] %s\n", maxNumWidth, num, maxLen, p, status, prof.PeerAddr)
+		}
+	}
+	fmt.Printf("  URL:\n    %s\n", sub.URL)
+	}
+
+func subscriptionUpdateCmd() {
+	fs := flag.NewFlagSet("subscription update", flag.ExitOnError)
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
+	fs.Parse(flagArgs)
+
+	var names []string
+	if len(args) == 0 {
+		names = listSubscriptions()
+		if len(names) == 0 {
+			fmt.Println("Нет подписок для обновления")
+			return
+		}
+	} else {
+		names = args
+	}
+
+	for _, name := range names {
+		sub, err := loadSubscription(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Подписка '%s' не найдена\n", name)
+			continue
+		}
+
+		if !*yes {
+			fmt.Printf("Обновить подписку '%s' (URL: %s)? [y/N]: ", name, sub.URL)
+			var answer string
+			if _, err := fmt.Scanf("%s", &answer); err != nil {
+				answer = ""
+			}
+			answer = strings.ToLower(strings.TrimSpace(answer))
+			if answer != "y" && answer != "yes" {
+				fmt.Printf("[*] Пропущена: %s\n", name)
+				continue
+			}
+		}
+
+		fmt.Printf("[*] Обновление подписки '%s'...\n", name)
+		created, removed, err := applySubscription(name, sub.URL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: %v\n", name, err)
+			continue
+		}
+
+		printSubscriptionOpResult(name, sub.URL, created, removed, sub)
+	}
+}
+
+func printSubscriptionOpResult(name, url string, created, removed []string, sub *SubscriptionConfig) {
+	fmt.Printf("\n[OK] Подписка '%s':\n", name)
+
+	maxNameLen := 0
+	maxPeerLen := 0
+	for _, p := range created {
+		if len(p) > maxNameLen {
+			maxNameLen = len(p)
+		}
+		prof, err := loadProfile(p)
+		if err == nil && len(prof.PeerAddr) > maxPeerLen {
+			maxPeerLen = len(prof.PeerAddr)
+		}
+	}
+	for _, p := range removed {
+		if len(p) > maxNameLen {
+			maxNameLen = len(p)
+		}
+	}
+
+	for _, p := range created {
+		prof, err := loadProfile(p)
+		if err != nil {
+			fmt.Printf("  + %-*s [ошибка загрузки]\n", maxNameLen, p)
+		} else {
+			status := "enabled"
+			if !isProfileEnabled(p) {
+				status = "disabled"
+			}
+			fmt.Printf("  + %-*s  %-*s  %s  [%s]\n", maxNameLen, p, maxPeerLen, prof.PeerAddr, maskPassword(prof.Password), status)
+		}
+	}
+	for _, p := range removed {
+		fmt.Printf("  - %s\n", p)
+	}
+	if len(created) == 0 && len(removed) == 0 {
+		fmt.Println("  (без изменений)")
+	}
+	if sub != nil {
+		if sub.Description != "" {
+			fmt.Printf("  Описание: %s\n", sub.Description)
+		}
+		if sub.TrafficUsedMb > 0 || sub.TrafficLimitMb > 0 {
+			fmt.Printf("  Трафик: %.1f / %.1f MB\n", sub.TrafficUsedMb, sub.TrafficLimitMb)
+		}
+	}
+	fmt.Printf("  URL:\n    %s\n", url)
 }

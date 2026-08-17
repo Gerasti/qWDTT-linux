@@ -24,12 +24,14 @@ Profile Management:
   edit/remove/show/enable/disable/test also accept glob masks, e.g. rm 'wdtt_*'
                               (quote the mask to avoid shell globbing)
    list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
-                               -en/-enabled: enabled only
-                               -dis/-disabled: disabled only
-                               -ro: read-only profiles only
-                               -active: running profiles only
-  show <name1> [name2] ...    Show profile details (alias: sh)
-                              -group GROUP: show all profiles in the group
+                                -en/-enabled: enabled only
+                                -dis/-disabled: disabled only
+                                -ro: read-only profiles only
+                                -sub: subscription-managed profiles only
+                                -active: running profiles only
+   show <name1> [name2] ...    Show profile details (alias: sh)
+                               -group GROUP: show all profiles in the group
+                               -sub: show all profiles managed by any subscription
   share <name> [-qwdtt|-q] [-group GROUP]  Show profile share link and QR code
                                 -qwdtt/-q: generate qwdtt://config? URL instead of wdtt://
                                 -group GROUP: share all profiles in the group
@@ -37,9 +39,11 @@ Profile Management:
   enable <name1> [name2] ...  Enable profiles (alias: en)
                               -group GROUP: enable all profiles in the group
                               -ro: only operate on read-only profiles
+                              -sub: enable all profiles managed by any subscription
   disable <name1> [name2] ... Disable profiles (alias: dis)
                               -group GROUP: disable all profiles in the group
                               -ro: only operate on read-only profiles
+                              -sub: disable all profiles managed by any subscription
   import <file>               Import profiles from JSON or ZIP file
                                 -dry-run: show what would be imported without saving
   bl list                   List bypass route domains
@@ -47,6 +51,15 @@ Profile Management:
   bl remove <d1> [d2...]    Remove domains from bypass routes file
   bl find <d1> [d2...]      Check if domains exist in bypass routes file
                                 All bl subcommands require -file PATH
+
+Subscription:
+  subscription <add|remove|show|move|update>  Manage subscriptions (alias: sub)
+    add <url>                Add subscription (name from JSON)
+    add <name> <url>         Add subscription with explicit name
+    remove <name> [-y]       Remove subscription and all its profiles (alias: rm)
+    show [<name>]            Show subscription details or list all (alias: sh)
+    move <old> <new>         Rename subscription (alias: mv)
+    update [<name>] [-y]         Update profiles from subscription URL (alias: upd)
 
 Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
@@ -58,15 +71,16 @@ Connection:
                                -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s) (alias: deb)
                                (e.g., watch -n 1 qwdtt debug)
-  test [profile1 ...] [--ro] [--enabled] [--disabled] [--group GROUP]
-                                Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
-                                Without args: test all profiles
-                                Each arg can be a profile name or wdtt://, qwdtt:// links
-                               -ro: test only read-only profiles
-                               -enabled/-en: test only enabled profiles
-                               -disabled/-dis: test only disabled profiles
-                               -group GROUP: test all profiles in the group
-                               -mode tun|socks: connection mode (default: tun)
+   test [profile1 ...] [--ro] [--enabled] [--disabled] [--group GROUP] [--sub]
+                                 Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
+                                 Without args: test all profiles
+                                 Each arg can be a profile name or wdtt://, qwdtt:// links
+                                -ro: test only read-only profiles
+                                -enabled/-en: test only enabled profiles
+                                -disabled/-dis: test only disabled profiles
+                                -group GROUP: test all profiles in the group
+                                -sub: test all profiles managed by any subscription
+                                -mode tun|socks: connection mode (default: tun)
                                -socks-port N: SOCKS5 port (default: 9050, with -mode socks)
                                 -timeout N: connection timeout in seconds (default: 10)
                                 -delay N: pause between profiles in seconds (default: 5)
@@ -182,6 +196,11 @@ Examples:
   qwdtt test "qwdtt://config?name=srv&peer=1.2.3.4:56000&pass=p&hashes=h1"  # test by qwdtt:// link
   qwdtt share myserver -qwdtt       # generate qwdtt://config? URL for sharing
   qwdtt share myserver -q            # same, short alias
+  qwdtt sub add https://example.com/sub.json -y  # add subscription
+  qwdtt sub add "My VPN" https://example.com/sub.json  # add with explicit name
+  qwdtt sub show                     # list all subscriptions
+  qwdtt sub update "My VPN"          # update profiles from subscription
+  qwdtt sub rm "My VPN" -y           # remove subscription and all profiles
 `, version)
 }
 
@@ -229,6 +248,12 @@ func main() {
 		logCmd()
 	case "test":
 		testCmd()
+	case "subscription", "sub":
+		subscriptionCmd()
+	case "__complete_subscriptions":
+		for _, name := range listSubscriptions() {
+			fmt.Println(name)
+		}
 	case "version", "--version":
 		fmt.Printf("qWDTT-linux v%s\n", version)
 	case "help", "-h", "--help":

@@ -50,6 +50,7 @@ func testCmd() {
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
 	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default: udp)")
 	group := fs.String("group", "", "Test all profiles in this group")
+	sub := fs.Bool("sub", false, "Test all profiles managed by any subscription")
 
 	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
@@ -61,6 +62,14 @@ func testCmd() {
 			return
 		}
 		args = append(members, args...)
+	}
+
+	if *sub && *group == "" && len(args) == 0 {
+		args = profilesInAllSubscriptions()
+		if len(args) == 0 {
+			fmt.Printf("Нет профилей, управляемых подписками\n")
+			return
+		}
 	}
 
 	args = expandProfileMasks(args)
@@ -111,6 +120,8 @@ func testCmd() {
 	if len(args) == 0 {
 		if *ro {
 			targetProfiles = listReadOnlyProfileNames()
+		} else if *sub {
+			targetProfiles = profilesInAllSubscriptions()
 		} else {
 			targetProfiles = listAllProfileNames()
 		}
@@ -139,6 +150,9 @@ func testCmd() {
 		labels := []string{}
 		if *ro {
 			labels = append(labels, "read-only")
+		}
+		if *sub {
+			labels = append(labels, "subscription")
 		}
 		if testEnabled {
 			labels = append(labels, "enabled")
