@@ -240,6 +240,17 @@ func connectCmd() {
 			notifyError("autoswitch", msg)
 			os.Exit(1)
 		}
+		if *mode == "tun" && rawIfaceActive() {
+			activeProfile := getActiveProfile()
+			target := activeProfile
+			if target == "" {
+				target = "другой процесс"
+			}
+			msg := fmt.Sprintf("Интерфейс %s уже используется в raw-режиме (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
+			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			notifyError("autoswitch", msg)
+			os.Exit(1)
+		}
 	} else {
 		// Single profile mode: check for conflicts
 		if isDaemonRunning(daemonProfile) {
@@ -269,6 +280,17 @@ func connectCmd() {
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
+			if rawIfaceActive() {
+				activeProfile := getActiveProfile()
+				target := activeProfile
+				if target == "" {
+					target = "другой процесс"
+				}
+				msg := fmt.Sprintf("Интерфейс %s уже используется в raw-режиме (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
 		} else if *mode == "raw" {
 			if rawIfaceActive() {
 				activeProfile := getActiveProfile()
@@ -277,6 +299,17 @@ func connectCmd() {
 					target = "другой процесс"
 				}
 				msg := fmt.Sprintf("Интерфейс %s уже используется (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
+				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				notifyError(profileName, msg)
+				os.Exit(1)
+			}
+			if isKernelInterfaceActive() {
+				activeProfile := getActiveProfile()
+				target := activeProfile
+				if target == "" {
+					target = "другой процесс"
+				}
+				msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется в tun-режиме (профиль: %s). Используйте qwdtt discon для остановки.", target)
 				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
 				notifyError(profileName, msg)
 				os.Exit(1)

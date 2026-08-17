@@ -129,10 +129,12 @@ complete -c qwdtt -n "__qwdtt_seen_command disconnect discon" -a "(__qwdtt_runni
 # enable/en - only disabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -a "(__qwdtt_disabled_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command enable en" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
+complete -c qwdtt -n "__qwdtt_seen_command enable en" -l ro -d "Only operate on read-only profiles"
 
 # disable/dis - only enabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command disable dis" -a "(__qwdtt_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command disable dis" -l group -r -a "(__qwdtt_groups)" -d "Operate on all profiles in this group"
+complete -c qwdtt -n "__qwdtt_seen_command disable dis" -l ro -d "Only operate on read-only profiles"
 
 # edit - all profile names and flags
 complete -c qwdtt -n "__qwdtt_seen_command edit" -a "(__qwdtt_all_profiles)" -d "Profile"

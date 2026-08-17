@@ -192,14 +192,26 @@ func ifname(n string) []byte {
 // только если новое значение меньше текущего. Поэтому min() реализовывать в
 // userspace не нужно.
 func setupRawMSSClampingNFT(iface string) error {
-	c := &nftables.Conn{}
+	// Фаза 1: очистка — удаляем таблицу, если она осталась от предыдущего процесса
+	// (например, после аварийного завершения). ENOENT (таблица не существует) здесь
+	// ожидаем и игнорируем. DelTable выполняется в отдельном Flush(), иначе ENOENT
+	// от него прерывает весь batch и AddTable никогда не выполняется.
+	{
+		cleanup := &nftables.Conn{}
+		cleanup.DelTable(&nftables.Table{
+			Family: nftables.TableFamilyIPv4,
+			Name:   nftTableName,
+		})
+		if err := cleanup.Flush(); err != nil {
+			if !errors.Is(err, os.ErrNotExist) &&
+				!strings.Contains(err.Error(), "no such file or directory") {
+				return fmt.Errorf("nft flush (cleanup): %w", err)
+			}
+		}
+	}
 
-	// На случай, если предыдущий процесс не успел удалить таблицу
-	// (например, после аварийного завершения) — чистим перед созданием.
-	c.DelTable(&nftables.Table{
-		Family: nftables.TableFamilyIPv4,
-		Name:   nftTableName,
-	})
+	// Фаза 2: создание таблицы, цепочки и правила в одном batch.
+	c := &nftables.Conn{}
 
 	table := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,

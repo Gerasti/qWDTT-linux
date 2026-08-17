@@ -784,12 +784,27 @@ func regenerateIDCmd() {
 func enableCmd() {
 	fs := flag.NewFlagSet("enable", flag.ExitOnError)
 	group := fs.String("group", "", "Operate on all profiles in this group")
+	ro := fs.Bool("ro", false, "Only operate on read-only profiles")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
+	if *ro && len(names) == 0 && *group == "" {
+		names = listReadOnlyProfileNames()
+	}
+
 	names = collectTargets(*group, names)
+
+	if *ro && len(names) > 0 {
+		for _, name := range names {
+			if !strings.HasPrefix(name, "ro-") {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не является read-only\n", name)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name1> [name2] ... [-group GROUP]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt enable <name1> [name2] ... [-group GROUP] [-ro]\n")
 		os.Exit(1)
 	}
 
@@ -824,12 +839,27 @@ func enableCmd() {
 func disableCmd() {
 	fs := flag.NewFlagSet("disable", flag.ExitOnError)
 	group := fs.String("group", "", "Operate on all profiles in this group")
+	ro := fs.Bool("ro", false, "Only operate on read-only profiles")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
+	if *ro && len(names) == 0 && *group == "" {
+		names = listReadOnlyProfileNames()
+	}
+
 	names = collectTargets(*group, names)
+
+	if *ro && len(names) > 0 {
+		for _, name := range names {
+			if !strings.HasPrefix(name, "ro-") {
+				fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не является read-only\n", name)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if len(names) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name1> [name2] ... [-group GROUP]\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt disable <name1> [name2] ... [-group GROUP] [-ro]\n")
 		os.Exit(1)
 	}
 
@@ -1358,10 +1388,18 @@ func disconnectCmd() {
 	// Notify that the profile was disconnected
 	notifyDisconnectedSync(targetProfile, disconnectMode)
 
-	// If disconnecting the active profile, clear it
+	// If disconnecting the active profile, clear it.
+	// In raw mode, teardownWG() would try to delete wg-qwdtt (which doesn't exist),
+	// return nil (table not found), and print a misleading "WireGuard конфиг удален".
+	// Raw TUN cleanup already happened via the deferred teardownRawTUN() in core.go
+	// when killByPidFile sent SIGINT and the process shut down gracefully.
 	if wasActive {
-		if err := teardownWG(); err == nil {
-			fmt.Println("[OK] WireGuard конфиг удален")
+		if disconnectMode != "raw" {
+			if err := teardownWG(); err == nil {
+				fmt.Println("[OK] WireGuard конфиг удален")
+			}
+		} else {
+			fmt.Println("[OK] Raw TUN очищен")
 		}
 		clearActiveProfile()
 	}

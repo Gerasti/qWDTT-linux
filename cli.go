@@ -14,7 +14,7 @@ func printUsage() {
 Usage:  qwdtt [OPTIONS] COMMAND
 
 Profile Management:
-  add <name> <wdtt://...>     Add a new profile
+  add <name> <wdtt://...>     Add or renew a profile
   edit <name1> [name2] ...    Edit existing profiles, same flags apply to all (alias: none)
                               -group GROUP: edit all profiles in the group
   remove <name1> [name2] ...  Remove profiles (alias: rm)
@@ -34,8 +34,10 @@ Profile Management:
   							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
   enable <name1> [name2] ...  Enable profiles (alias: en)
                               -group GROUP: enable all profiles in the group
+                              -ro: only operate on read-only profiles
   disable <name1> [name2] ... Disable profiles (alias: dis)
                               -group GROUP: disable all profiles in the group
+                              -ro: only operate on read-only profiles
   import <file>               Import profiles from JSON or ZIP file
                                 -dry-run: show what would be imported without saving
   bl list                   List bypass route domains

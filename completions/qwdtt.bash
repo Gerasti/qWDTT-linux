@@ -90,7 +90,7 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-group" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -group" -- "$cur") )
             elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
                 local disabled_profiles=$(qwdtt __complete_disabled 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$disabled_profiles" -- "$cur") )
@@ -101,11 +101,10 @@ _qwdtt_completions() {
                 local group_names=$(qwdtt __complete_groups 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$group_names" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group -timeout -mode -socks-port -socks-user -socks-password -transport -delay" -- "$cur") )
-             elif [[ $prev == "-mode" ]]; then
-                COMPREPLY=( $(compgen -W "tun socks raw" -- "$cur") )
-             elif [[ $prev == "-transport" ]]; then
-                COMPREPLY=( $(compgen -W "udp tcp" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -group" -- "$cur") )
+            elif [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
+                local enabled_profiles=$(qwdtt __complete_enabled 2>/dev/null)
+                COMPREPLY=( $(compgen -W "$enabled_profiles" -- "$cur") )
             fi
             ;;
         test)

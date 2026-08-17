@@ -1,6 +1,6 @@
 # qWDTT CLI v0.9.5
 
-CLI VPN клиент для Linux через TURN-серверы VK с WireGuard.
+CLI VPN клиент для Linux через TURN-серверы VK с WireGuard или Raw.
 
 ## Возможности
 
@@ -199,6 +199,8 @@ qwdtt edit myserver -groups work,personal
 qwdtt edit myserver -groups ""
 qwdtt disable myserver mysrv2         # отключить несколько профилей
 qwdtt enable myserver mysrv2          # включить несколько профилей
+qwdtt enable -ro                      # включить все read-only профили
+qwdtt disable -ro                     # отключить все read-only профили
 qwdtt rm myserver mysrv2              # удалить несколько профилей
 qwdtt show myserver mysrv2            # показать несколько профилей
 qwdtt move myserver myserver-new      # переименовать профиль
@@ -219,12 +221,13 @@ qwdtt move <old_name> <new_name>      - Переименовать профил�
 qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
 qwdtt list [<group1> ...] [флаги]    - Список профилей, отфильтрованный по группам (alias: ls)
 qwdtt show <name1> [name2] ...       - Показать профили (alias: sh)
-qwdtt enable <name1> [name2] ...     - Включить профили (alias: en)
-qwdtt disable <name1> [name2] ...    - Отключить профили (alias: dis)
+qwdtt enable <name1> [name2] ...     - Включить профили (alias: en, -ro чтобы только read-only)
+qwdtt disable <name1> [name2] ...    - Отключить профили (alias: dis, -ro чтобы только read-only)
 
 # Управление группами: edit, remove, show, enable, disable, test поддерживают -group
 qwdtt enable -group work             - Включить все профили группы "work"
 qwdtt disable -group work            - Отключить все профили группы "work"
+qwdtt en -ro                         - Включить все read-only профили (alias: enable -ro)
 qwdtt show -group work               - Показать все профили группы "work"
 qwdtt remove -group work             - Удалить все профили группы "work"
 qwdtt edit -group work -priority 100 - Изменить все профили группы "work"
@@ -304,6 +307,11 @@ deb    - debug
 - `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
 - `-groups G1,G2` - установить группы профиля (через запятую, "" или "none" для очистки)
 
+## Флаги enable/disable
+
+- `-group GROUP` - включить/отключить все профили в группе
+- `-ro` - только read-only профили (имена с префиксом `ro-`)
+
 ## Флаги test
 
 - `-ro` - тестировать только read-only профили
@@ -353,6 +361,7 @@ deb    - debug
 - Имена с префиксом `ro-` (например, `ro-work`)
 - Нельзя редактировать или удалить через CLI
 - Можно включать/отключать: `qwdtt enable ro-work`
+- С флагом `-ro` можно включать/отключать все read-only профили сразу: `qwdtt enable -ro`, `qwdtt disable -ro`
 - Поддержка sops-nix для секретов (device_id, wdtt:// ссылки)
 - Автоматически создаются для указанных пользователей
 
