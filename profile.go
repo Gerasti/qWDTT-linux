@@ -14,10 +14,11 @@ type ProfileData struct {
 	Hashes   []string `json:"hashes"`
 	Listen   string   `json:"listen,omitempty"`
 	TurnHost string   `json:"turn,omitempty"`
-	TurnPort string   `json:"port,omitempty"`
+	TurnPort string   `json:"turnPort,omitempty"`
+	Workers  int      `json:"workers,omitempty"`
 	DeviceID string   `json:"device_id,omitempty"`
 	Priority int      `json:"priority,omitempty"`
-	LinkFile string   `json:"link_file,omitempty"` // Path to file containing wdtt:// URL
+	LinkFile string   `json:"link_file,omitempty"` // Path to file containing wdtt:// or qwdtt:// URL
 	Groups   []string `json:"groups,omitempty"`   // Labels for organizing profiles
 }
 
@@ -98,7 +99,7 @@ func loadProfile(name string) (*ProfileData, error) {
 			return nil, fmt.Errorf("профиль %q: не удалось прочитать link_file %q: %w", name, p.LinkFile, err)
 		}
 
-		link, err := parseWdttURL(strings.TrimSpace(string(linkData)))
+		link, err := parseLink(strings.TrimSpace(string(linkData)))
 		if err != nil {
 			return nil, fmt.Errorf("профиль %q: не удалось распарсить link_file %q: %w", name, p.LinkFile, err)
 		}
@@ -107,6 +108,12 @@ func loadProfile(name string) (*ProfileData, error) {
 		p.PeerAddr = link.IP + ":" + link.DTLSPort
 		p.Password = link.Password
 		p.Hashes = link.Hashes
+		if link.Workers > 0 {
+			p.Workers = link.Workers
+		}
+		if link.Port != "" {
+			p.Listen = "127.0.0.1:" + link.Port
+		}
 	}
 
 	return &p, nil

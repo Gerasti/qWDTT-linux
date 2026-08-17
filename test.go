@@ -83,8 +83,8 @@ func testCmd() {
 	var targetProfiles []string
 
 	for _, arg := range args {
-		if strings.HasPrefix(arg, "wdtt://") {
-			link, err := parseWdttURL(arg)
+		if strings.HasPrefix(arg, "wdtt://") || strings.HasPrefix(arg, "qwdtt://") {
+			link, err := parseLink(arg)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] Неверная ссылка '%s': %v\n", arg, err)
 				os.Exit(1)
@@ -241,15 +241,15 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		deviceID = getOrCreateDeviceID()
 	}
 
-	cfg := core.Config{
+ 	cfg := core.Config{
 		PeerAddr:    prof.PeerAddr,
 		Password:    prof.Password,
 		Hashes:      prof.Hashes,
-		Listen:      "127.0.0.1:9000",
+		Listen:      prof.Listen,
 		TurnHost:    prof.TurnHost,
 		TurnPort:    prof.TurnPort,
 		DeviceID:    deviceID,
-		Workers:     9,
+		Workers:     prof.Workers,
 		CaptchaMode: "auto",
 		MTU:         1280,
 		DNS:         "yandex",
@@ -261,10 +261,13 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		RawPort:     "56003",
 		Transport:   transport,
 	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = defaultWorkers
+	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
 	} else if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:9000"
+		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
 
 	cs := newCaptchaSocket(name)
@@ -460,11 +463,11 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		PeerAddr:    fmt.Sprintf("%s:%s", link.IP, link.DTLSPort),
 		Password:    link.Password,
 		Hashes:      link.Hashes,
-		Listen:      "127.0.0.1:9000",
+		Listen:      "127.0.0.1:" + link.Port,
 		TurnHost:    "",
 		TurnPort:    "",
 		DeviceID:    deviceID,
-		Workers:     9,
+		Workers:     link.Workers,
 		CaptchaMode: "auto",
 		MTU:         1280,
 		DNS:         "yandex",
@@ -479,7 +482,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
 	} else if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:9000"
+		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
 
 	c, err := core.New(cfg)

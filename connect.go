@@ -210,8 +210,12 @@ func connectCmd() {
 			removeSplitCfg(daemonProfile)
 			activeProfile := getActiveProfile()
 			if activeProfile == daemonProfile {
-				if err := teardownWG(); err == nil {
-					fmt.Println("[OK] WireGuard конфиг удален")
+				if *mode != "raw" {
+					if err := teardownWG(); err == nil {
+						fmt.Println("[OK] WireGuard конфиг удален")
+					}
+				} else {
+					fmt.Println("[OK] Raw TUN очищен")
 				}
 				clearActiveProfile()
 			}
@@ -596,6 +600,12 @@ func tryConnectProfile(
 		Transport:   transport,
 	}
 
+	// Use profile-level workers if the CLI value is still the default and
+	// the profile specifies a different count.
+	if workers == defaultWorkers && prof.Workers > 0 {
+		cfg.Workers = prof.Workers
+	}
+
 	if hashesOverride != "" {
 		cfg.Hashes = strings.Split(hashesOverride, ",")
 		for i := range cfg.Hashes {
@@ -604,11 +614,9 @@ func tryConnectProfile(
 	}
 
 	if mode == "socks" {
-		// Use a random UDP port for DTLS to allow multiple concurrent socks instances.
-		// wireproxy handles WireGuard in userspace, so only the DTLS UDP socket needs to be unique.
 		cfg.Listen = "127.0.0.1:0"
 	} else if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:9000"
+		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
 
 	fmt.Printf("Подключение к профилю '%s'...\n", profileName)

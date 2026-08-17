@@ -64,23 +64,44 @@ func splitFlagsAndArgs(fs *flag.FlagSet, args []string) (flagArgs []string, posi
 func addCmd() {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	deviceID := fs.String("device-id", "", "Device ID (например, 0fd4ffcddb759420)")
-	fs.Parse(os.Args[3:])
+	if len(os.Args) > 3 {
+		fs.Parse(os.Args[3:])
+	}
 
-	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt add <name> <wdtt://...> [-device-id ID]\n")
+	usageMsg := "Usage: qwdtt add <name> <wdtt://... or qwdtt://config?name=...> [-device-id ID]\n"
+
+	var name, rawURL string
+
+	// URL-only form: qwdtt add <wdtt://...> or qwdtt add <qwdtt://config?...&name=...>
+	if len(os.Args) >= 3 && (strings.HasPrefix(os.Args[2], "wdtt://") || strings.HasPrefix(os.Args[2], "qwdtt://")) {
+		rawURL = os.Args[2]
+	} else {
+		// Traditional form: qwdtt add <name> <url>
+		if len(os.Args) < 4 {
+			fmt.Fprint(os.Stderr, usageMsg)
+			os.Exit(1)
+		}
+		name = os.Args[2]
+		rawURL = fs.Arg(0)
+	}
+
+	if rawURL == "" {
+		fmt.Fprint(os.Stderr, usageMsg)
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
-	url := fs.Arg(0)
-	if url == "" {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt add <name> <wdtt://...> [-device-id ID]\n")
-		os.Exit(1)
-	}
-
-	link, err := parseWdttURL(url)
+	link, err := parseLink(rawURL)
 	if err != nil {
 		log.Fatalf("Ошибка парсинга URL: %v", err)
+	}
+
+	// In URL-only form, use the name from the link (qwdtt://config?name=... or wdtt://...#Name)
+	if name == "" {
+		name = link.Name
+		if name == "" || name == "Server" {
+			fmt.Fprint(os.Stderr, usageMsg)
+			os.Exit(1)
+		}
 	}
 
 	devID := *deviceID
@@ -92,11 +113,22 @@ func addCmd() {
 	existing, err := loadProfile(name)
 	profileExisted := err == nil
 
+	listen := "127.0.0.1:" + defaultListenPort
+	if link.Port != "" {
+		listen = "127.0.0.1:" + link.Port
+	}
+
+	workers := link.Workers
+	if workers <= 0 {
+		workers = defaultWorkers
+	}
+
 	prof := ProfileData{
 		PeerAddr: fmt.Sprintf("%s:%s", link.IP, link.DTLSPort),
 		Password: link.Password,
 		Hashes:   link.Hashes,
-		Listen:   "127.0.0.1:9000",
+		Listen:   listen,
+		Workers:  workers,
 		DeviceID: devID,
 	}
 
@@ -118,6 +150,12 @@ func addCmd() {
 	}
 	fmt.Printf("  Peer: %s\n", prof.PeerAddr)
 	fmt.Printf("  Хешей: %d\n", len(prof.Hashes))
+	if prof.Workers != defaultWorkers {
+		fmt.Printf("  Workers: %d\n", prof.Workers)
+	}
+	if link.Port != "" && link.Port != defaultListenPort {
+		fmt.Printf("  Port: %s\n", link.Port)
+	}
 }
 
 func editCmd() {
@@ -128,6 +166,7 @@ func editCmd() {
 	deviceID := fs.String("device-id", "", "Device ID")
 	listen := fs.String("listen", "", "Локальный адрес")
 	priority := fs.Int("priority", -1, "Приоритет (чем выше, тем раньше)")
+	workers := fs.Int("workers", -1, "Количество воркеров (должно быть кратно 9)")
 	groups := fs.String("groups", "", "Группы через запятую (пустая строка или none для очистки)")
 	group := fs.String("group", "", "Operate on all profiles in this group")
 	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
@@ -150,7 +189,7 @@ func editCmd() {
 
 	if !anyFlags {
 		fmt.Println("[!] Не указаны параметры для изменения")
-		fmt.Println("Используйте: -peer, -password, -hashes, -device-id, -listen, -priority или -groups")
+		fmt.Println("Используйте: -peer, -password, -hashes, -device-id, -listen, -priority, -workers или -groups")
 		os.Exit(1)
 	}
 
@@ -207,11 +246,22 @@ func editCmd() {
 			fmt.Printf("[*] %s: Listen изменён: %s\n", name, *listen)
 		}
 
-		if *priority != -1 {
-			prof.Priority = *priority
-			changed = true
-			fmt.Printf("[*] %s: Приоритет изменён: %d\n", name, *priority)
+	if *priority != -1 {
+		prof.Priority = *priority
+		changed = true
+		fmt.Printf("[*] %s: Приоритет изменён: %d\n", name, *priority)
+	}
+
+	if *workers != -1 {
+		if err := validateWorkers(*workers); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] %s: workers: %v\n", name, err)
+			hadErrors = true
+			continue
 		}
+		prof.Workers = *workers
+		changed = true
+		fmt.Printf("[*] %s: Workers изменён: %d\n", name, *workers)
+	}
 
 		if groupsChanged {
 			val := strings.TrimSpace(*groups)
@@ -722,6 +772,11 @@ func showCmd() {
 		if prof.DeviceID != "" {
 			fmt.Printf("  Device ID: %s\n", prof.DeviceID)
 		}
+		workers := prof.Workers
+		if workers <= 0 {
+			workers = defaultWorkers
+		}
+		fmt.Printf("  Workers: %d\n", workers)
 
 		enabled := isProfileEnabled(name)
 		status := "enabled"
@@ -1024,6 +1079,12 @@ func expandProfileMasks(names []string) []string {
 		out = append(out, n)
 	}
 	for _, n := range names {
+		// URL args (wdtt://, qwdtt://) must pass through without glob matching
+		// — qwdtt:// URLs contain '?' which would be mistaken for a glob pattern.
+		if strings.HasPrefix(n, "wdtt://") || strings.HasPrefix(n, "qwdtt://") {
+			add(n)
+			continue
+		}
 		if strings.ContainsAny(n, "*?[") {
 			matched := false
 			for _, p := range all {
@@ -1777,28 +1838,35 @@ func hasRawModeProfile(details map[string]*ProfileDetails) bool {
 
 func shareCmd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt share <name>\n")
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt share <name> [-qwdtt|-q] [-group GROUP]\n")
 		os.Exit(1)
 	}
 
-	name := os.Args[2]
-	prof, err := loadProfile(name)
-	if err != nil {
-		log.Fatalf("Ошибка загрузки профиля: %v", err)
+	fs := flag.NewFlagSet("share", flag.ExitOnError)
+	qwdttFlag := fs.Bool("qwdtt", false, "Generate qwdtt://config? URL format instead of wdtt://")
+	fs.BoolVar(qwdttFlag, "q", false, "Alias for -qwdtt")
+	group := fs.String("group", "", "Operate on all profiles in this group")
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
+
+	var names []string
+	if *group != "" {
+		names = collectTargets(*group, nil)
+	} else {
+		names = args
 	}
 
-	// Get share URL
-	var link string
-	if prof.LinkFile != "" {
-		// Try to read original wdtt:// URL from link file
-		linkData, err := os.ReadFile(prof.LinkFile)
-		if err == nil {
-			link = strings.TrimSpace(string(linkData))
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: qwdtt share <name> [-qwdtt|-q] [-group GROUP]\n")
+		os.Exit(1)
+	}
+
+	for _, name := range names {
+		prof, err := loadProfile(name)
+		if err != nil {
+			log.Fatalf("Ошибка загрузки профиля '%s': %v", name, err)
 		}
-	}
 
-	// Fallback: reconstruct from profile data
-	if link == "" {
 		// Parse PeerAddr (IP:PORT)
 		ip := ""
 		dtlsPort := ""
@@ -1809,24 +1877,67 @@ func shareCmd() {
 			ip = prof.PeerAddr
 		}
 
-		// Build hashes string
-		hashStr := strings.Join(prof.Hashes, ",")
-
-		// Use profile name as the display name
 		displayName := name
 		if strings.HasPrefix(name, "ro-") {
 			displayName = name[3:] // strip "ro-" prefix for display
 		}
 
-		// Reconstruct wdtt:// URL with defaults for missing PORT2 (0) and PORT3 (9000)
-		link = fmt.Sprintf("wdtt://%s:%s:0:9000:%s:%s#%s", ip, dtlsPort, prof.Password, hashStr, displayName)
+		var output string
+
+		if *qwdttFlag {
+			workers := prof.Workers
+			if workers <= 0 {
+				workers = defaultWorkers
+			}
+			port := defaultListenPort
+			if prof.Listen != "" {
+				if idx := strings.LastIndex(prof.Listen, ":"); idx != -1 {
+					port = prof.Listen[idx+1:]
+				} else {
+					port = prof.Listen
+				}
+			}
+			link := &WdttLink{
+				IP:       ip,
+				DTLSPort: dtlsPort,
+				Password: prof.Password,
+				Hashes:   prof.Hashes,
+				Name:     displayName,
+				Workers:  workers,
+				Port:     port,
+			}
+			output = buildQwdttConfigURL(link)
+		} else {
+			// Try to read original URL from link file
+			var link string
+			if prof.LinkFile != "" {
+				linkData, err := os.ReadFile(prof.LinkFile)
+				if err == nil {
+					link = strings.TrimSpace(string(linkData))
+				}
+			}
+
+			// Fallback: reconstruct wdtt:// URL
+			if link == "" {
+				hashStr := strings.Join(prof.Hashes, ",")
+				link = fmt.Sprintf("wdtt://%s:%s:0:9000:%s:%s#%s", ip, dtlsPort, prof.Password, hashStr, displayName)
+			}
+			output = link
+		}
+
+		if len(names) > 1 {
+			fmt.Printf("=== %s ===\n", displayName)
+		}
+
+		// Output
+		fmt.Println("QR-код:")
+		qrterminal.Generate(output, qrterminal.L, os.Stdout)
+		fmt.Printf("Ссылка: \n%s\n", output)
+
+		if len(names) > 1 {
+			fmt.Println()
+		}
 	}
-
-	// Output
-	fmt.Println("QR-код:")
-	qrterminal.Generate(link, qrterminal.L, os.Stdout)
-	fmt.Printf("Ссылка: \n%s\n", link)
-
 }
 
 type importProfile struct {

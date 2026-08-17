@@ -61,7 +61,7 @@ func selectProfileInteractive() string {
 
 	if len(profiles) == 0 {
 		fmt.Fprintln(os.Stderr, "Нет включенных профилей")
-		fmt.Fprintln(os.Stderr, "Используйте: qwdtt add <name> <wdtt://...>")
+		fmt.Fprintln(os.Stderr, "Используйте: qwdtt add <name> <wdtt://...|qwdtt://config?name=...>")
 		fmt.Fprintln(os.Stderr, "Или: qwdtt enable <name>")
 		return ""
 	}

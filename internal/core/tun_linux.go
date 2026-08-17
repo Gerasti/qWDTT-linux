@@ -93,7 +93,6 @@ func setupRawTUN(name, addr string, mtu int) error {
 		return fmt.Errorf("link set up: %w", err)
 	}
 
-	// Маршруты полного туннеля: 0.0.0.0/1 + 128.0.0.0/1 (как в applyWGConfig)
 	idx := link.Attrs().Index
 	var added []string
 	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {

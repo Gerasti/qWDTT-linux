@@ -14,7 +14,7 @@ func printUsage() {
 Usage:  qwdtt [OPTIONS] COMMAND
 
 Profile Management:
-  add <name> <wdtt://...>     Add or renew a profile
+  add <name> <wdtt://... or qwdtt://config?name=...>  Add or renew a profile
   edit <name1> [name2] ...    Edit existing profiles, same flags apply to all (alias: none)
                               -group GROUP: edit all profiles in the group
   remove <name1> [name2] ...  Remove profiles (alias: rm)
@@ -30,8 +30,10 @@ Profile Management:
                                -active: running profiles only
   show <name1> [name2] ...    Show profile details (alias: sh)
                               -group GROUP: show all profiles in the group
-  share <name>                Show profile share link and QR code
-  							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
+  share <name> [-qwdtt|-q] [-group GROUP]  Show profile share link and QR code
+                                -qwdtt/-q: generate qwdtt://config? URL instead of wdtt://
+                                -group GROUP: share all profiles in the group
+							   (e.g. qwdtt share <name> | tail -n1 | wl-copy)
   enable <name1> [name2] ...  Enable profiles (alias: en)
                               -group GROUP: enable all profiles in the group
                               -ro: only operate on read-only profiles
@@ -59,7 +61,7 @@ Connection:
   test [profile1 ...] [--ro] [--enabled] [--disabled] [--group GROUP]
                                 Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
                                 Without args: test all profiles
-                                Each arg can be a profile name or wdtt:// link
+                                Each arg can be a profile name or wdtt://, qwdtt:// links
                                -ro: test only read-only profiles
                                -enabled/-en: test only enabled profiles
                                -disabled/-dis: test only disabled profiles
@@ -120,11 +122,13 @@ Edit Flags:
   -hashes H1,H2               Change VK hashes
   -device-id ID               Change Device ID
   -listen ADDR                Change local UDP address (default: 127.0.0.1:9000)
-  -priority N                 Set profile priority (higher = earlier with -auto-switch)
-  -groups G1,G2               Set profile groups (comma-separated, "" or none to clear)
+   -priority N                 Set profile priority (higher = earlier with -auto-switch)
+   -workers N                  Set worker count (must be multiple of 9, e.g. 9, 18, 27)
+   -groups G1,G2               Set profile groups (comma-separated, "" or none to clear)
 
 Examples:
   qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
+  qwdtt add qwdtt://config?name=myserver&peer=1.2.3.4:56000&hashes=h1,h2&workers=18&port=9000&pass=secret
   qwdtt con                        # interactive profile selection
   qwdtt con myserver               # connect to profile
   qwdtt con myserver --toggle      # with stop if run, start if not
@@ -175,6 +179,9 @@ Examples:
   qwdtt test --enabled             # test only enabled profiles
   qwdtt test --disabled            # test only disabled profiles
   qwdtt test --mode socks          # test in SOCKS5 mode without setcap and root
+  qwdtt test "qwdtt://config?name=srv&peer=1.2.3.4:56000&pass=p&hashes=h1"  # test by qwdtt:// link
+  qwdtt share myserver -qwdtt       # generate qwdtt://config? URL for sharing
+  qwdtt share myserver -q            # same, short alias
 `, version)
 }
 

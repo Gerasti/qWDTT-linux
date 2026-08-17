@@ -1,4 +1,4 @@
-# qWDTT CLI v0.9.5
+# qWDTT linux v0.9.5
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard или Raw.
 
@@ -151,8 +151,14 @@ sudo setcap cap_net_admin+eip qwdtt
 ## Использование
 
 ```bash
-# Добавить профиль
+# Добавить профиль (wdtt:// ссылка)
 qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
+
+# Добавить профиль (qwdtt://config ссылка — более гибкий формат с query-параметрами)
+qwdtt add myserver "qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret"
+
+# Добавить профиль по qwdtt://config ссылке (имя берётся из параметра name)
+qwdtt add "qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret"
 
 # Импорт профилей из JSON или ZIP (например, экспорт из мобильного клиента)
 qwdtt import /path/to/profiles.json
@@ -204,7 +210,8 @@ qwdtt disable -ro                     # отключить все read-only пр
 qwdtt rm myserver mysrv2              # удалить несколько профилей
 qwdtt show myserver mysrv2            # показать несколько профилей
 qwdtt move myserver myserver-new      # переименовать профиль
-qwdtt share myserver        # QR-код и share-ссылка
+qwdtt share myserver        # QR-код и share-ссылка (wdtt:// формат)
+qwdtt share myserver -qwdtt  # QR-код и qwdtt://config? ссылка
 ```
 
 ## Команды
@@ -213,9 +220,9 @@ qwdtt share myserver        # QR-код и share-ссылка
 qwdtt connect <profile> [флаги]      - Подключиться к VPN (alias: con)
 qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon)
 qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg)
-qwdtt share <name>                   - Показать share-ссылку и QR-код
+qwdtt share <name> [-qwdtt]          - Показать share-ссылку и QR-код (-qwdtt: qwdtt://config? формат)
 qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
-qwdtt add <name> <wdtt://...>        - Добавить профиль
+qwdtt add <name> <wdtt://...|qwdtt://config?name=...> - Добавить профиль
 qwdtt edit <name1> [name2] ... [флаги]  - Редактировать профили (флаги применяются ко всем)
 qwdtt move <old_name> <new_name>      - Переименовать профиль (alias: mv)
 qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
@@ -304,8 +311,9 @@ deb    - debug
 - `-hashes H1,H2` - изменить VK-хеши
 - `-device-id ID` - изменить Device ID
 - `-listen ADDR` - изменить локальный UDP адрес (default: 127.0.0.1:9000)
-- `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
-- `-groups G1,G2` - установить группы профиля (через запятую, "" или "none" для очистки)
+ - `-priority N` - установить приоритет профиля (выше = раньше в auto-switch)
+ - `-workers N` - установить количество воркеров (должно быть кратно 9: 9, 18, 27, ...)
+ - `-groups G1,G2` - установить группы профиля (через запятую, "" или "none" для очистки)
 
 ## Флаги enable/disable
 
@@ -343,6 +351,30 @@ deb    - debug
 **Режим raw:**
 - Использует `netlink` для настройки маршрутов и IP-адреса
 - Флаг `-raw-port PORT` задаёт порт для обратного соединения (default: 56003)
+
+## Форматы ссылок
+
+Поддерживаются два формата ссылок для добавления профилей:
+
+**1. wdtt:// (позиционный формат):**
+```
+wdtt://IP:DTLSPort:PORT2:PORT3:password:hash1,hash2#Name
+```
+Пример: `wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer`
+
+**2. qwdtt://config (query-параметры, более гибкий):**
+```
+qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9000&pass=пароль
+```
+Параметры:
+- `name` — имя профиля (обязательно для `qwdtt add <URL>`)
+- `peer` — адрес сервера в формате `IP:PORT` (обязательно)
+- `hashes` — VK хеши через запятую (опционально)
+- `workers` — количество воркеров (по умолчанию 9)
+- `port` — локальный порт прослушивания (по умолчанию 9000)
+- `pass` — пароль (обязательно)
+
+Оба формата поддерживаются в командах `add`, `test` и `share -qwdtt`.
 
 ## Управление профилями
 
