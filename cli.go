@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const version = "0.9.5"
+const version = "1.0.0"
 
 func printUsage() {
 	fmt.Printf(`qWDTT-linux v%s - VPN client via VK TURN servers

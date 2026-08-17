@@ -127,10 +127,10 @@ func getWGStats(iface string) (*WGStats, error) {
 }
 
 type ProcessUsage struct {
-	CPU      float64
-	Memory   int64
-	Threads  int
-	Workers  int
+	CPU     float64
+	Memory  int64
+	Threads int
+	Workers int
 }
 
 // getProcessUsageByPID returns resource usage for a specific PID.
@@ -248,22 +248,23 @@ func getProcessUsage() (*ProcessUsage, error) {
 	}
 
 	return &ProcessUsage{
-		CPU:      totalCPU,
-		Memory:   totalMem,
-		Threads:  totalThreads,
-		Workers:  workers,
+		CPU:     totalCPU,
+		Memory:  totalMem,
+		Threads: totalThreads,
+		Workers: workers,
 	}, nil
 }
 
 // ProfileDetails holds information about a running qwdtt profile process.
 type ProfileDetails struct {
-	Mode          string // "tun" or "socks"
-	SocksPort     int    // SOCKS5 port (only relevant for socks mode)
-	SocksUser     string // SOCKS5 username (if specified via -socks-user)
-	SocksPass     string // SOCKS5 password (if specified via -socks-password)
-	PID           int    // Process PID
-	BlackList     string // raw -bl / --black-list value (comma-separated domains)
-	BlackListFile string // path to -bl-file / --black-list-file JSON file
+	Mode          string   // "tun" or "socks"
+	SocksPort     int      // SOCKS5 port (only relevant for socks mode)
+	SocksUser     string   // SOCKS5 username (if specified via -socks-user)
+	SocksPass     string   // SOCKS5 password (if specified via -socks-password)
+	PID           int      // Process PID
+	BlackList     string   // raw -bl / --black-list value (comma-separated domains)
+	BlackListFile string   // path to -bl-file / --black-list-file JSON file
+	SplitRoutes   []string // resolved bypass route CIDRs (from state file)
 }
 
 // getRunningProfileDetails returns details (mode, socks port, PID) for each running profile.
@@ -390,9 +391,10 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 		}
 
 		// Prefer state file over cmdline parsing for blacklist info
-		if bl, blFile := readSplitCfg(profile); bl != "" || blFile != "" {
+		if bl, blFile, routes := readSplitCfgFull(profile); bl != "" || blFile != "" || len(routes) > 0 {
 			d.BlackList = bl
 			d.BlackListFile = blFile
+			d.SplitRoutes = routes
 		}
 
 		details[profile] = d
@@ -457,4 +459,3 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 
 	return details
 }
-

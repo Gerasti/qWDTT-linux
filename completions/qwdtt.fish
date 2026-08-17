@@ -115,8 +115,8 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l transport -d "Tran
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l toggle -d "Stop running profile, or start if not running"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l black-list -a "bl" -d "These domains go direct"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s bl -l bl -d "Alias for --black-list"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -l black-list-file -a "bl-file" -d "Read blacklist domains from JSON file"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -s bl-file -l bl-file -d "Alias for --black-list-file"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -l black-list-file -a "(__fish_complete_path)" -d "Read blacklist domains from JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -s bl-file -l bl-file -a "(__fish_complete_path)" -d "Alias for --black-list-file"
 
 # show - all profile names and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command show sh; and not __qwdtt_last_is_group_flag" -f -a "(__qwdtt_all_profiles)" -d "Profile"

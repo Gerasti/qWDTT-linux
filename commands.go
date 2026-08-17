@@ -246,22 +246,22 @@ func editCmd() {
 			fmt.Printf("[*] %s: Listen изменён: %s\n", name, *listen)
 		}
 
-	if *priority != -1 {
-		prof.Priority = *priority
-		changed = true
-		fmt.Printf("[*] %s: Приоритет изменён: %d\n", name, *priority)
-	}
-
-	if *workers != -1 {
-		if err := validateWorkers(*workers); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] %s: workers: %v\n", name, err)
-			hadErrors = true
-			continue
+		if *priority != -1 {
+			prof.Priority = *priority
+			changed = true
+			fmt.Printf("[*] %s: Приоритет изменён: %d\n", name, *priority)
 		}
-		prof.Workers = *workers
-		changed = true
-		fmt.Printf("[*] %s: Workers изменён: %d\n", name, *workers)
-	}
+
+		if *workers != -1 {
+			if err := validateWorkers(*workers); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] %s: workers: %v\n", name, err)
+				hadErrors = true
+				continue
+			}
+			prof.Workers = *workers
+			changed = true
+			fmt.Printf("[*] %s: Workers изменён: %d\n", name, *workers)
+		}
 
 		if groupsChanged {
 			if prof.Subscription != "" {
@@ -445,25 +445,25 @@ func moveCmd() {
 }
 
 func listCmd() {
- 	type profileInfo struct {
- 		name        string
- 		peer        string
- 		hashes      int
- 		status      string
- 		priority    int
- 		groups      []string
- 		active      bool
- 		mode        string // "tun" or "socks" (only set if active)
- 		socksPort   int    // SOCKS5 port (only set if active)
- 		readOnly    bool
- 		subscription string // subscription name if managed, "" otherwise
+	type profileInfo struct {
+		name         string
+		peer         string
+		hashes       int
+		status       string
+		priority     int
+		groups       []string
+		active       bool
+		mode         string // "tun" or "socks" (only set if active)
+		socksPort    int    // SOCKS5 port (only set if active)
+		readOnly     bool
+		subscription string // subscription name if managed, "" otherwise
 	}
 
- 	var regularProfiles []profileInfo
- 	var readOnlyProfiles []profileInfo
- 	var subscriptionProfiles []profileInfo
- 	maxNameLen := 0
- 	maxPeerLen := 0
+	var regularProfiles []profileInfo
+	var readOnlyProfiles []profileInfo
+	var subscriptionProfiles []profileInfo
+	maxNameLen := 0
+	maxPeerLen := 0
 
 	// ANSI color codes
 	const (
@@ -513,27 +513,27 @@ func listCmd() {
 				socksPort = d.SocksPort
 			}
 
- 			info := profileInfo{
- 				name:        name,
- 				peer:        prof.PeerAddr,
- 				hashes:      len(prof.Hashes),
- 				status:      status,
- 				priority:    prof.Priority,
- 				groups:      prof.Groups,
- 				active:      active,
- 				mode:        mode,
- 				socksPort:   socksPort,
- 				readOnly:    isReadOnly,
- 				subscription: prof.Subscription,
- 			}
+			info := profileInfo{
+				name:         name,
+				peer:         prof.PeerAddr,
+				hashes:       len(prof.Hashes),
+				status:       status,
+				priority:     prof.Priority,
+				groups:       prof.Groups,
+				active:       active,
+				mode:         mode,
+				socksPort:    socksPort,
+				readOnly:     isReadOnly,
+				subscription: prof.Subscription,
+			}
 
-  			if isReadOnly {
- 				readOnlyProfiles = append(readOnlyProfiles, info)
- 			} else if prof.Subscription != "" {
- 				subscriptionProfiles = append(subscriptionProfiles, info)
- 			} else {
- 				regularProfiles = append(regularProfiles, info)
- 			}
+			if isReadOnly {
+				readOnlyProfiles = append(readOnlyProfiles, info)
+			} else if prof.Subscription != "" {
+				subscriptionProfiles = append(subscriptionProfiles, info)
+			} else {
+				regularProfiles = append(regularProfiles, info)
+			}
 
 			if len(name) > maxNameLen {
 				maxNameLen = len(name)
@@ -556,10 +556,10 @@ func listCmd() {
 	enabled := fs.Bool("enabled", false, "Show only enabled profiles")
 	dis := fs.Bool("dis", false, "Show only disabled profiles")
 	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
- 	ro := fs.Bool("ro", false, "Show only read-only profiles")
- 	active := fs.Bool("active", false, "Show only running profiles")
- 	sub := fs.Bool("sub", false, "Show only profiles managed by any subscription")
- 	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
+	ro := fs.Bool("ro", false, "Show only read-only profiles")
+	active := fs.Bool("active", false, "Show only running profiles")
+	sub := fs.Bool("sub", false, "Show only profiles managed by any subscription")
+	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
 	showEnabled := *en || *enabled
@@ -586,63 +586,63 @@ func listCmd() {
 			return filtered
 		}
 		regularProfiles = filterByGroups(regularProfiles)
-  		readOnlyProfiles = filterByGroups(readOnlyProfiles)
-  		subscriptionProfiles = filterByGroups(subscriptionProfiles)
-  	}
+		readOnlyProfiles = filterByGroups(readOnlyProfiles)
+		subscriptionProfiles = filterByGroups(subscriptionProfiles)
+	}
 
-  	// Filter by enabled/disabled status
-  	if showEnabled || showDisabled {
-  		filterByStatus := func(src []profileInfo) []profileInfo {
-  			var filtered []profileInfo
-  			for _, p := range src {
-  				if (showEnabled && p.status == "enabled") || (showDisabled && p.status == "disabled") {
-  					filtered = append(filtered, p)
-  				}
-  			}
-  			return filtered
-  		}
-  		regularProfiles = filterByStatus(regularProfiles)
-  		readOnlyProfiles = filterByStatus(readOnlyProfiles)
-  		subscriptionProfiles = filterByStatus(subscriptionProfiles)
-  	}
+	// Filter by enabled/disabled status
+	if showEnabled || showDisabled {
+		filterByStatus := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				if (showEnabled && p.status == "enabled") || (showDisabled && p.status == "disabled") {
+					filtered = append(filtered, p)
+				}
+			}
+			return filtered
+		}
+		regularProfiles = filterByStatus(regularProfiles)
+		readOnlyProfiles = filterByStatus(readOnlyProfiles)
+		subscriptionProfiles = filterByStatus(subscriptionProfiles)
+	}
 
-  	// Filter: -ro shows only read-only profiles
-  	if *ro {
-  		regularProfiles = nil
-  		subscriptionProfiles = nil
-  	}
+	// Filter: -ro shows only read-only profiles
+	if *ro {
+		regularProfiles = nil
+		subscriptionProfiles = nil
+	}
 
-  	// Filter: -sub shows only profiles managed by any subscription
-  	if *sub {
-  		filterBySub := func(src []profileInfo) []profileInfo {
-  			var filtered []profileInfo
-  			for _, p := range src {
-  				if p.subscription != "" {
-  					filtered = append(filtered, p)
-  				}
-  			}
-  			return filtered
-  		}
-  		regularProfiles = nil
-  		readOnlyProfiles = nil
-  		subscriptionProfiles = filterBySub(subscriptionProfiles)
-  	}
+	// Filter: -sub shows only profiles managed by any subscription
+	if *sub {
+		filterBySub := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				if p.subscription != "" {
+					filtered = append(filtered, p)
+				}
+			}
+			return filtered
+		}
+		regularProfiles = nil
+		readOnlyProfiles = nil
+		subscriptionProfiles = filterBySub(subscriptionProfiles)
+	}
 
-  	// Filter: -active shows only running profiles
- 	if *active {
- 		filterActive := func(src []profileInfo) []profileInfo {
- 			var filtered []profileInfo
- 			for _, p := range src {
- 				if p.active {
- 					filtered = append(filtered, p)
- 				}
- 			}
- 			return filtered
- 		}
- 		regularProfiles = filterActive(regularProfiles)
- 		readOnlyProfiles = filterActive(readOnlyProfiles)
- 		subscriptionProfiles = filterActive(subscriptionProfiles)
- 	}
+	// Filter: -active shows only running profiles
+	if *active {
+		filterActive := func(src []profileInfo) []profileInfo {
+			var filtered []profileInfo
+			for _, p := range src {
+				if p.active {
+					filtered = append(filtered, p)
+				}
+			}
+			return filtered
+		}
+		regularProfiles = filterActive(regularProfiles)
+		readOnlyProfiles = filterActive(readOnlyProfiles)
+		subscriptionProfiles = filterActive(subscriptionProfiles)
+	}
 
 	// Sort profiles by priority (highest first), then by name
 	sortProfilesByPriority := func(profiles []profileInfo) {
@@ -654,10 +654,10 @@ func listCmd() {
 		})
 	}
 	sortProfilesByPriority(regularProfiles)
- 	sortProfilesByPriority(readOnlyProfiles)
- 	sortProfilesByPriority(subscriptionProfiles)
+	sortProfilesByPriority(readOnlyProfiles)
+	sortProfilesByPriority(subscriptionProfiles)
 
- 	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 && len(subscriptionProfiles) == 0 {
+	if len(regularProfiles) == 0 && len(readOnlyProfiles) == 0 && len(subscriptionProfiles) == 0 {
 		var conditions []string
 		if showEnabled {
 			conditions = append(conditions, "включённых")
@@ -748,10 +748,10 @@ func listCmd() {
 				}
 			}
 
- 			groupsStr := ""
- 			if len(p.groups) > 0 {
- 				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
- 			}
+			groupsStr := ""
+			if len(p.groups) > 0 {
+				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
+			}
 
 			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s%s\n",
 				activeMarker,
@@ -766,9 +766,9 @@ func listCmd() {
 		}
 	}
 
- 	printProfiles(regularProfiles, "Профили")
- 	printProfiles(subscriptionProfiles, "Подписки")
- 	printProfiles(readOnlyProfiles, "Read-only профили")
+	printProfiles(regularProfiles, "Профили")
+	printProfiles(subscriptionProfiles, "Подписки")
+	printProfiles(readOnlyProfiles, "Read-only профили")
 
 	// Show autoswitch status with mode info
 	if d, ok := runningDetails["autoswitch"]; ok {
@@ -1566,7 +1566,23 @@ func disconnectCmd() {
 		killByPgrep(targetProfile)
 	}
 
+	// Read saved bypass route CIDRs from state file BEFORE removing it.
+	// Used as a fallback to clean up orphaned routes if the daemon did not
+	// shut down gracefully (e.g. SIGKILL).
+	// In autoswitch mode, also check the current profile's state file.
+	var savedSplitRoutes []string
+	if autoswitchCurrent := getAutoswitchCurrentProfile(); autoswitchCurrent != "" && autoswitchCurrent != targetProfile {
+		_, _, curRoutes := readSplitCfgFull(autoswitchCurrent)
+		savedSplitRoutes = append(savedSplitRoutes, curRoutes...)
+	}
+	_, _, targetRoutes := readSplitCfgFull(targetProfile)
+	savedSplitRoutes = append(savedSplitRoutes, targetRoutes...)
+
 	removeSplitCfg(targetProfile)
+	// Also clean up autoswitch current profile state file if it exists
+	if autoswitchCurrent := getAutoswitchCurrentProfile(); autoswitchCurrent != "" && autoswitchCurrent != targetProfile {
+		removeSplitCfg(autoswitchCurrent)
+	}
 
 	// Notify that the profile was disconnected
 	notifyDisconnectedSync(targetProfile, disconnectMode)
@@ -1579,12 +1595,25 @@ func disconnectCmd() {
 	if wasActive {
 		if disconnectMode != "raw" {
 			if err := teardownWG(); err == nil {
-				fmt.Println("[OK] WireGuard конфиг удален")
+				fmt.Println("[OK] WireGuard конфиг удалён")
 			}
 		} else {
 			fmt.Println("[OK] Raw TUN очищен")
 		}
 		clearActiveProfile()
+	}
+
+	// Fallback: remove any orphaned bypass routes that the daemon could not
+	// clean up (e.g. after SIGKILL). For TUN mode, teardownWG() already removed
+	// tunnel routes and the wg-qwdtt interface; bypass routes via the default
+	// gateway remain and are cleaned here. For raw mode, teardownWG() is not
+	// called, so bypass routes are cleaned here as well.
+	if len(savedSplitRoutes) > 0 {
+		if err := core.ClearBypassRoutes(savedSplitRoutes); err != nil {
+			fmt.Printf("[WARNING] Не удалось очистить некоторые bypass-маршруты: %v\n", err)
+		} else {
+			fmt.Printf("[OK] Bypass-маршруты очищены (%d CIDR)\n", len(savedSplitRoutes))
+		}
 	}
 
 	fmt.Println("[OK] Отключено")
@@ -2753,22 +2782,22 @@ func subscriptionCmd() {
 		os.Exit(1)
 	}
 
- 	sub := os.Args[2]
- 	switch sub {
- 	case "add":
- 		subscriptionAddCmd()
- 	case "remove", "rm":
- 		subscriptionRemoveCmd()
- 	case "show", "sh":
- 		subscriptionShowCmd()
- 	case "move", "mv":
- 		subscriptionMoveCmd()
-     case "update", "upd":
-         subscriptionUpdateCmd()
- 	default:
- 		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, remove (rm), show (sh), move (mv), update\n", sub)
- 		os.Exit(1)
- 	}
+	sub := os.Args[2]
+	switch sub {
+	case "add":
+		subscriptionAddCmd()
+	case "remove", "rm":
+		subscriptionRemoveCmd()
+	case "show", "sh":
+		subscriptionShowCmd()
+	case "move", "mv":
+		subscriptionMoveCmd()
+	case "update", "upd":
+		subscriptionUpdateCmd()
+	default:
+		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, remove (rm), show (sh), move (mv), update\n", sub)
+		os.Exit(1)
+	}
 }
 
 func subscriptionAddCmd() {
@@ -3114,7 +3143,7 @@ func subscriptionShowCmd() {
 		}
 	}
 	fmt.Printf("  URL:\n    %s\n", sub.URL)
-	}
+}
 
 func subscriptionUpdateCmd() {
 	fs := flag.NewFlagSet("subscription update", flag.ExitOnError)

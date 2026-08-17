@@ -405,6 +405,12 @@ func connectCmd() {
 	defer cs.Stop()
 	defer dm.Release()
 
+	// Ensure bypass routes and tunnel routes are cleaned up on any daemon
+	// exit path (graceful SIGINT, panic, or normal return from the main loop).
+	// This is critical for split tunneling (--bl) routes which are otherwise
+	// orphaned when the daemon process terminates.
+	defer teardownTunnelRoutes()
+
 	// Set active profile for tracking/debug/disconnect.
 	// In auto-switch mode, active_profile is always "autoswitch".
 	// In tun mode (non-autoswitch), active_profile is set to the specific profile.
@@ -796,7 +802,7 @@ func tryConnectProfile(
 					fmt.Println("[*] Весь трафик теперь идет через VPN")
 
 					if splitCfg != nil {
-						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
 					}
 
 					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
@@ -841,7 +847,7 @@ func tryConnectProfile(
 								len(splitCfg.domains), len(bypassIPs))
 						}
 						if splitCfg != nil {
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
 						}
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
@@ -875,21 +881,21 @@ func tryConnectProfile(
 
 						fmt.Println("[*] Проверка работоспособности туннеля...")
 						time.Sleep(2 * time.Second)
-					if err := testWGConnectivity(); err != nil {
-						notifyError(profileName, "Туннель не работает")
-						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
-						c.Stop()
-						teardownWG()
-						if !skipActiveProfileClear {
-							clearActiveProfile()
+						if err := testWGConnectivity(); err != nil {
+							notifyError(profileName, "Туннель не работает")
+							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+							c.Stop()
+							teardownWG()
+							if !skipActiveProfileClear {
+								clearActiveProfile()
+							}
+							return false, false, autoSwitch
 						}
-						return false, false, autoSwitch
-					}
 						fmt.Println("[OK] Туннель работает корректно")
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
 
 						if splitCfg != nil {
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile)
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
 						}
 
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)

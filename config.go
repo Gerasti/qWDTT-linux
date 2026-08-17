@@ -92,11 +92,12 @@ func splitCfgPath(profile string) string {
 	return filepath.Join(pidFilesDir(), "qwdtt-"+profile+".bl")
 }
 
-func writeSplitCfg(profile string, bl, blFile string) error {
+func writeSplitCfg(profile string, bl, blFile string, splitRoutes []string) error {
 	data, err := json.Marshal(struct {
-		BlackList     string `json:"black_list"`
-		BlackListFile string `json:"black_list_file"`
-	}{bl, blFile})
+		BlackList     string   `json:"black_list"`
+		BlackListFile string   `json:"black_list_file"`
+		SplitRoutes   []string `json:"split_routes"`
+	}{bl, blFile, splitRoutes})
 	if err != nil {
 		return err
 	}
@@ -104,18 +105,24 @@ func writeSplitCfg(profile string, bl, blFile string) error {
 }
 
 func readSplitCfg(profile string) (bl, blFile string) {
+	bl, blFile, _ = readSplitCfgFull(profile)
+	return bl, blFile
+}
+
+func readSplitCfgFull(profile string) (bl, blFile string, splitRoutes []string) {
 	data, err := os.ReadFile(splitCfgPath(profile))
 	if err != nil {
-		return "", ""
+		return "", "", nil
 	}
 	var cfg struct {
-		BlackList     string `json:"black_list"`
-		BlackListFile string `json:"black_list_file"`
+		BlackList     string   `json:"black_list"`
+		BlackListFile string   `json:"black_list_file"`
+		SplitRoutes   []string `json:"split_routes"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", ""
+		return "", "", nil
 	}
-	return cfg.BlackList, cfg.BlackListFile
+	return cfg.BlackList, cfg.BlackListFile, cfg.SplitRoutes
 }
 
 func removeSplitCfg(profile string) {

@@ -1,4 +1,4 @@
-# qWDTT linux v0.9.5
+# qWDTT linux v1.0.0
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard или Raw.
 
@@ -16,11 +16,15 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - Live вывод лога демона (`-log` флаг и `qwdtt log` команда)
 - share <name> — показ ссылки и QR-кода для профиля
 - import <name> — импорт профилей из JSON или ZIP файлов приложения андроид
+- test --group qubit — автотестирование работы ВСЕХ профилей группы qubit
+- subscription или sub для обновления профилей через HTTPs
+- bl — редактор списка обхода туннеля (bypass routes)
 - Debug режим для мониторинга соединения
 
 ## Установка
-
 ### NixOS Module
+<details>
+<summary> show </summary>
 
 Автоматически настраивает capabilities
 
@@ -78,6 +82,7 @@ sudo nixos-rebuild switch
 ```
 
 После установки `qwdtt` доступен через `/run/wrappers/bin/qwdtt`, `qwdtt`.
+</details>
 
 ## Зависимости установки
 
@@ -103,7 +108,7 @@ sudo dnf install iputils curl patchelf
 
 ```bash
 # Скачать бинарник из Release
-curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v0.9.5/qwdtt
+curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.0.0/qwdtt
 
 # Указать правильный интерпретатор (glibc) и сделать исполняемым
 patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 qwdtt
@@ -149,6 +154,8 @@ sudo setcap cap_net_admin+eip qwdtt
 ```
 
 ## Использование
+<details>
+<summary> show </summary>
 
 ```bash
 # Добавить профиль (wdtt:// ссылка)
@@ -168,7 +175,7 @@ qwdtt import profiles.json --dry-run      # просмотр без сохран
 # Подключиться
 qwdtt con myserver
 
-# Auto-switch режим с режимом Raw
+# Автопереключение профилей с режимом Raw
 qwdtt con -auto-switch --mode raw
 
 # С кастомным DNS resolver
@@ -180,8 +187,8 @@ qwdtt con myserver -dns doh:https://dns.example.com/dns-query
 qwdtt debug
 # или watch -n 1 qwdtt debug
 
-# Просмотр лога демона (последние 20 строк)
-qwdtt log autoswitch -n 20
+# Просмотр лога профиля (последние 20 строк)
+qwdtt log estoniya -n 20
 
 # Просмотр лога в реальном времени
 qwdtt log autoswitch -f
@@ -193,7 +200,7 @@ qwdtt con -auto-switch -log
 qwdtt discon <current-profile-name>
 
 # Отключиться
-qwdtt disconnect
+qwdtt disconnect (выбор, если несколько)
 
 # Управление
 qwdtt ls                    # список
@@ -206,28 +213,33 @@ qwdtt edit myserver -groups ""
 qwdtt disable myserver mysrv2         # отключить несколько профилей
 qwdtt enable myserver mysrv2          # включить несколько профилей
 qwdtt enable -ro                      # включить все read-only профили
-qwdtt disable -ro                     # отключить все read-only профили
+qwdtt disable -sub                     # отключить все профили подписок
 qwdtt rm myserver mysrv2              # удалить несколько профилей
 qwdtt show myserver mysrv2            # показать несколько профилей
 qwdtt move myserver myserver-new      # переименовать профиль
 qwdtt share myserver        # QR-код и share-ссылка (wdtt:// формат)
-qwdtt share myserver -qwdtt  # QR-код и qwdtt://config? ссылка
+qwdtt share myserver -qwdtt  # QR-код и qwdtt://config? ссылка (alias: -q)
+qwdtt share -group work      # QR-код и share-ссылка для всех профилей группы "work"
+qwdtt share myserver | tail -n1 | wl-copy  # скопировать share-ссылку в буфер обмена
 ```
+</details>
 
 ## Команды
 
 ```
-qwdtt connect <profile> [флаги]      - Подключиться к VPN (alias: con)
-qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon)
-qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg)
-qwdtt share <name> [-qwdtt]          - Показать share-ссылку и QR-код (-qwdtt: qwdtt://config? формат)
+qwdtt connect <profile> [флаги]      - Подключиться к VPN (alias: con; без профиля — интерактивный выбор)
+qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon; без профиля — отключить активный)
+qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg; без профиля — autoswitch или активный)
+qwdtt share <name> [-qwdtt|-q] [-group GROUP] - Показать share-ссылку и QR-код (-qwdtt/-q: qwdtt://config? формат)
 qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
+qwdtt test [profile1 ...] [флаги]    - Тестировать подключение (VKAuth, Workers, Connect, InternetCheck; без аргументов — все профили)
+                                       Аргументы: имена профилей, маски, wdtt:// и qwdtt:// ссылки
 qwdtt add <name> <wdtt://...|qwdtt://config?name=...> - Добавить профиль
 qwdtt edit <name1> [name2] ... [флаги]  - Редактировать профили (флаги применяются ко всем)
 qwdtt move <old_name> <new_name>      - Переименовать профиль (alias: mv)
 qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
 qwdtt list [<group1> ...] [флаги]    - Список профилей, отфильтрованный по группам (alias: ls)
-qwdtt show <name1> [name2] ...       - Показать профили (alias: sh)
+qwdtt show <name1> [name2] ...       - Показать профили (alias: sh, -sub: профили подписок)
 qwdtt enable <name1> [name2] ...     - Включить профили (alias: en, -ro чтобы только read-only)
 qwdtt disable <name1> [name2] ...    - Отключить профили (alias: dis, -ro чтобы только read-only)
 
@@ -247,15 +259,23 @@ qwdtt test 'wdtt_*'                  - Протестировать все пр�
 # ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
 # (в fish ошибка "No matches for wildcard" — это ошибка шелла, решается кавычками)
 qwdtt import <file.json|file.zip> [--dry-run] - Импортировать профили из JSON или ZIP (--dry-run: просмотр без сохранения)
-qwdtt subscription <add|remove|show|update> [флаги] - Управление подписками (alias: sub)
+qwdtt bl <add|list|remove|find> [-file PATH] - Управление списком обхода туннеля (bypass routes) в JSON-файле
+  bl list (ls)             - Показать все домены из файла
+  bl add <d1> [d2...]      - Добавить домены/IP в файл
+  bl remove (rm) <d1> [d2...] [-y] - Удалить домены из файла
+  bl find (fd) <d1> [d2...] - Проверить, есть ли домены в файле
+                                Флаг -file/-f PATH обязателен (можно указывать ~ и $ENV)
+qwdtt subscription <add|remove|show|move|update> [флаги] - Управление подписками (alias: sub)
   add <url>                    - Добавить подписку (имя берётся из JSON subscriptionName)
   add <name> <url>             - Добавить подписку с явным именем
   remove <name> [-y]           - Удалить подписку и все её профили (alias: rm)
   show [<name>]                - Показать подписку или список всех (alias: sh)
+  move <old> <new>             - Переименовать подписку (alias: mv)
   update [<name>] [-y]         - Обновить профили из подписки (перезаписывает все профили)
 qwdtt device-id [id]                 - Показать/установить Device ID (alias: id)
 qwdtt regenerate-id                  - Перегенерировать Device ID
-qwdtt version                        - Версия
+qwdtt version                        - Версия (alias: --version)
+qwdtt help                           - Показать справку (alias: -h, --help)
 ```
 
 ### Короткие алиасы
@@ -272,6 +292,7 @@ en     - enable
 dis    - disable
 deb    - debug
 sub    - subscription
+mv     - move
 ```
 
 ## Флаги connect
@@ -293,6 +314,8 @@ sub    - subscription
   - Опции: `tun` — прямой WireGuard через kernel; `socks` — локальный SOCKS5 прокси
   - `raw` — сырой IP-режим через TUN/TAP интерфейс, лучшая оптимизация на сервере 
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
+- `-socks-user USER` - логин SOCKS5 (только с `-mode socks`)
+- `-socks-password PASS` - пароль SOCKS5 (только с `-mode socks`)
 - `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
 - `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp). Использовать `tcp`, если UDP до TURN-relay блокируется
 - `-log` - выводить лог демона в терминал в реальном времени
@@ -302,11 +325,39 @@ sub    - subscription
 - `-bl-file PATH` / `--black-list-file` - прочитать домены из JSON-файла (поле `bypassRoutes`), можно комбинировать с `-bl`
   - Пример: `-bl-file ./qwdtt_bypass_sites.json`
 
+## Редактор bypass-списка (`qwdtt bl`)
+
+<details>
+<summary> show </summary>
+
+Управляет списком обхода туннеля (поле `bypassRoutes`) в JSON-файле — тем же, что используется с флагом `-bl-file`. Работает как с обычным JSON-файлом, так и с ZIP (редактирование только файла, ZIP только для чтения).
+
+```bash
+# Показать все домены из файла
+qwdtt bl list -file ./qwdtt_bypass_sites.json      # alias: ls
+
+# Добавить домены/IP (при необходимости файл создастся)
+qwdtt bl add vk.ru yandex.ru -file ./qwdtt_bypass_sites.json
+
+# Удалить домены (запрашивает подтверждение, -y — без него)
+qwdtt bl rm vk.ru -file ./qwdtt_bypass_sites.json
+
+# Проверить, есть ли домены в файле
+qwdtt bl find yandex.ru -file ./qwdtt_bypass_sites.json   # alias: fd
+```
+
+- Флаг `-file PATH` (или `-f`) обязателен. Поддерживаются `~` и переменные окружения (`$ENV`) в пути.
+- Формат поля `bypassRoutes` (массив или строка с переносами) сохраняется при редактировании; для нового файла создаётся заголовок `qwdtt-bypass`.
+- IDN-домены (втб.рф) хранятся в punycode (xn--), а при выводе (`list`) показываются в Unicode.
+</details>
+
 ## Флаги list
 
 - `-en` / `-enabled` - показать только включённые профили
 - `-dis` / `-disabled` - показать только отключённые профили
 - `-ro` - показать только read-only профили
+- `-sub` - показать только профили, управляемые подписками
+- `-active` - показать только запущенные (активные) профили
 - `<group1> [group2] ...` - позиционный аргумент: показать только профили из указанных групп (поддерживается несколько)
 
   Примеры: `qwdtt ls work`, `qwdtt ls work personal`, `qwdtt ls -ro`, `qwdtt ls -en work`
@@ -326,6 +377,7 @@ sub    - subscription
 
 - `-group GROUP` - включить/отключить все профили в группе
 - `-ro` - только read-only профили (имена с префиксом `ro-`)
+- `-sub` - только профили, управляемые подписками
 
 ## Флаги test
 
@@ -333,8 +385,12 @@ sub    - subscription
 - `-en` / `-enabled` - тестировать только включённые профили
 - `-dis` / `-disabled` - тестировать только отключённые профили
 - `-group GROUP` - тестировать все профили группы
-- `-mode MODE` - режим подключения: `tun` или `socks` (default: tun)
+- `-sub` - тестировать все профили, управляемые подписками
+- `-mode MODE` - режим подключения: `tun`, `socks` или `raw` (default: tun)
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, с `-mode socks`)
+- `-socks-user USER` - логин SOCKS5 (только с `-mode socks`)
+- `-socks-password PASS` - пароль SOCKS5 (только с `-mode socks`)
+- `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp)
 - `-timeout N` - таймаут подключения в секундах (default: 10)
 - `-delay N` - пауза между профилями в секундах (default: 5)
 
@@ -357,9 +413,12 @@ sub    - subscription
 
 **Режим raw:**
 - Использует `netlink` для настройки маршрутов и IP-адреса
+- MSS clamp выполняется через nftables (GO библиотека `google/nftables)
 - Флаг `-raw-port PORT` задаёт порт для обратного соединения (default: 56003)
 
 ## Форматы ссылок
+<details>
+<summary> show </summary>
 
 Поддерживаются два формата ссылок для добавления профилей:
 
@@ -376,12 +435,13 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 Параметры:
 - `name` — имя профиля (обязательно для `qwdtt add <URL>`)
 - `peer` — адрес сервера в формате `IP:PORT` (обязательно)
-- `hashes` — VK хеши через запятую (опционально)
+- `hashes` — VK хеши через запятую
 - `workers` — количество воркеров (по умолчанию 9)
 - `port` — локальный порт прослушивания (по умолчанию 9000)
 - `pass` — пароль (обязательно)
 
-Оба формата поддерживаются в командах `add`, `test` и `share -qwdtt`.
+Оба формата поддерживаются в командах `add`, `test` и для `share -qwdtt` (alias `-q`).
+</details>
 
 ## Управление профилями
 
@@ -412,13 +472,13 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 
 ```json
 {
-  "subscriptionName": "DarkBit VPN",
+  "subscriptionName": "BLUA VPN",
   "description": "Подписка · до 24.08.2026",
   "profiles": [
     {
-      "name": "Германия",
-      "peer": "144.31.223.80:56000",
-      "password": "wiGm3McD5R",
+      "name": "FREELAND",
+      "peer": "121.11.142.10:56000",
+      "password": "P@ssw0rd",
       "hashes": "vk_hash_1,vk_hash_2",
       "workersPerHash": 16,
       "listenPort": 9000
@@ -438,6 +498,7 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 | `qwdtt sub add <url>` | Добавить подписку (имя из `subscriptionName` в JSON) |
 | `qwdtt sub add <name> <url>` | Добавить подписку с явным именем |
 | `qwdtt sub show [<name>]` | Показать подписку или список всех |
+| `qwdtt sub move <old> <new>` | Переименовать подписку (alias: mv) |
 | `qwdtt sub update [<name>]` | Обновить профили из подписки (заменяет все профили) |
 | `qwdtt sub upd [<name>]` | alias для update |
 | `qwdtt sub rm <name>` | Удалить подписку и все её профили |
@@ -451,7 +512,6 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 - В группу подписки **нельзя** добавить другие профили
 - Профили подписки нельзя удалить через `qwdtt rm` — используйте `qwdtt sub rm`
 - `qwdtt sub update` **заменяет** все профили подписки (удаляет старые, создаёт новые)
-- НестSubscription-флаги (`edit -priority`, `-peer`, `-workers` и т.д.) работают как обычно
 
 ### Примеры
 
@@ -466,17 +526,19 @@ qwdtt sub add "My VPN" "https://example.com/sub.json"
 qwdtt sub show
 
 # Обновить конкретную подписку
-qwdtt sub update "DarkBit VPN"
+qwdtt sub update "Qubit VPN"
 
 # Обновить все подписки
 qwdtt sub update
 
 # Удалить подписку и все её профили
-qwdtt sub rm "DarkBit VPN" -y
+qwdtt sub rm "Qubit VPN" -y
 ```
 
 ## DNS Resolvers
 
+<details>
+<summary> show </summary>
 Поддерживаются следующие DNS resolvers:
 
 **Стандартные UDP:**
@@ -492,6 +554,7 @@ qwdtt sub rm "DarkBit VPN" -y
 - `doh:https://...` - кастомный DoH endpoint
 
 Пример: `qwdtt con myserver -dns doh-cloudflare`
+</details>
 
 ## Suspend/Resume
 
@@ -504,6 +567,7 @@ qwdtt sub rm "DarkBit VPN" -y
 - `cap_net_admin` capabilities
 - systemd (для suspend/resume)
 - D-Bus session bus (для уведомлений)
+- Версия ядра => 4.14 (MSS clamp, стабильность для режима Raw)
 
 ## Структура проекта
 
@@ -521,13 +585,32 @@ qwdtt sub rm "DarkBit VPN" -y
 ├── subscription.go       # Управление подписками (HTTPS JSON)
 ├── suspend.go            # Мониторинг suspend/resume
 ├── test.go               # Команда test (VKAuth, Workers, Connect, InternetCheck)
-├── url_parser.go         # Парсинг wdtt:// URL
+├── translit.go           # Транслитерация имён
+├── url_parser.go         # Парсинг wdtt:// и qwdtt:// URL
 ├── wireguard_linux.go    # WireGuard интеграция (netlink/wgctrl, capabilities)
-├── internal/core/        # Core библиотека (TURN, DTLS, DoH)
+├── qwdtt_bypass_sites.json # Пример файла bypass-маршрутов (поле bypassRoutes)
+├── internal/core/        # Core библиотека (TURN, DTLS, DoH, captcha, bypass и др.)
+│   ├── core.go           # Ядро подключения
+│   ├── session.go        # Сессии и автопереключение
+│   ├── dispatcher.go     # Диспетчер пакетов
+│   ├── tun_linux.go      # Raw TUN/TAP, маршруты, MSS clamp (nftables)
+│   ├── bypass_routes_linux.go # Bypass-маршруты
+│   ├── captcha_v2.go     # VK captcha (Go solver)
+│   ├── captcha_v2_slider.go # VK captcha slider
+│   ├── wireproxy_runner.go # SOCKS5 режим (wireproxy)
+│   ├── doh.go            # DNS-over-HTTPS
+│   ├── obfs.go           # Обфускация
+│   ├── protocol.go       # Протокол обмена
+│   ├── wgconfig.go       # WireGuard конфигурация
+│   └── ...               # прочие модули
 ├── modules/nixos/        # NixOS module
-├── completions/          # Bash/Fish автодополнение
+│   └── default.nix       # NixOS security wrapper
+├── completions/          # Bash/Fish автодополнения
 ├── flake.nix             # Nix flake конфигурация
-└── go.mod                # Go dependencies
+├── go.mod                # Go dependencies
+├── go.sum                # Контрольные суммы зависимостей
+├── vendor/               # Вендорированные зависимости
+└── LICENSE               # GNU GPL-3.0
 ```
 
 ## Лицензия
