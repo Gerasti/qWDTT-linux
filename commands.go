@@ -90,7 +90,7 @@ func addCmd() {
 		os.Exit(1)
 	}
 
-	link, err := parseLink(rawURL)
+	link, err := parseLinkWithHint(rawURL)
 	if err != nil {
 		log.Fatalf("Ошибка парсинга URL: %v", err)
 	}
@@ -103,6 +103,8 @@ func addCmd() {
 			os.Exit(1)
 		}
 	}
+
+	name = transliterateCyrillic(name)
 
 	devID := *deviceID
 	if devID == "" {
@@ -1911,7 +1913,13 @@ func debugCmd() {
 				} else {
 					fmt.Printf("  [ERROR] не удалось получить статистику: %v\n", err)
 				}
-				printBlackList(e.d)
+				// not on the autoswitch pseudo-profile, so print the current
+				// profile's blacklist here (reflects hot-reloaded bl-file).
+				if curD, ok := details[currentAutoswitchProfile]; ok {
+					printBlackList(curD)
+				} else {
+					printBlackList(e.d)
+				}
 				fmt.Println()
 				continue
 			}
@@ -2342,17 +2350,22 @@ func loadImportFromZip(path string) ([]importProfile, error) {
 	return allEntries, nil
 }
 
-// splitDomains разбирает CSV-строку доменов: разделяет, trim, dedup, filter пустых.
+// splitDomains разбирает строку доменов, разделённых пробельными символами
+// (пробел, таб, перевод строки): trim, dedup, filter пустых. Запятая в
+// отдельном домене — ошибка, т.к. доменные имена не могут содержать запятых.
 func splitDomains(raw string) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		d := strings.TrimSpace(part)
-		if d == "" || seen[d] {
+	for _, part := range strings.Fields(raw) {
+		if strings.Contains(part, ",") {
+			fmt.Fprintf(os.Stderr, "[ERROR] домен не может содержать запятую: %q\n", part)
+			os.Exit(1)
+		}
+		if seen[part] {
 			continue
 		}
-		seen[d] = true
-		out = append(out, d)
+		seen[part] = true
+		out = append(out, part)
 	}
 	return out
 }
@@ -2553,23 +2566,76 @@ func saveBypassFile(path string, raw map[string]json.RawMessage, domains []strin
 }
 
 func blCmd() {
+	printBlUsage := func() {
+		fmt.Fprintln(os.Stderr, "Usage: qwdtt bl <add|list|remove|find|init|load> [options] [paths/domains...]")
+		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd), init, load <path>")
+		fmt.Fprintln(os.Stderr, "  -f, --file PATH   Path to bypass routes JSON file (required, except for init/load)")
+		fmt.Fprintln(os.Stderr, "  -c, --current     Use current running profile's bl-file")
+	}
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt bl <add|list|remove|find> -file PATH [domains...]\n")
-		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd)")
+		printBlUsage()
 		os.Exit(1)
 	}
-	sub := os.Args[2]
-
 	fs := flag.NewFlagSet("bl", flag.ExitOnError)
 	var file string
 	fs.StringVar(&file, "file", "", "Path to bypass routes JSON file (required)")
 	fs.StringVar(&file, "f", "", "Alias for -file")
+	current := fs.Bool("current", false, "Use the current running profile's bl-file")
+	fs.BoolVar(current, "c", false, "Alias for --current")
 	yes := fs.Bool("y", false, "Skip confirmation prompt (remove only)")
-	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
+	profile := fs.String("profile", "", "Target a specific running profile's bl-file (overrides -c/--current, works for socks)")
+	fs.StringVar(profile, "p", "", "Alias for -profile")
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+		args = args[1:]
+	}
+
+	if sub == "init" {
+		blInitCmd(args)
+		return
+	}
+
+	if sub == "load" {
+		blLoad(args, *profile)
+		return
+	}
+
+	if *profile != "" && *current {
+		fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -c/--current и -p/--profile одновременно")
+		os.Exit(1)
+	}
+	if *profile != "" {
+		if file != "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -p/--profile и -f/--file одновременно")
+			os.Exit(1)
+		}
+		file = getBlFileForProfile(*profile)
+		if file == "" {
+			fmt.Fprintf(os.Stderr, "[ERROR] bl-file не найден для профиля %q: профиль не запущен или не использует -bl-file\n", *profile)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "[*] Используется bl-file профиля %q: %s\n", *profile, file)
+	}
+
+	if *current {
+		if file != "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -c/--current и -f/--file одновременно")
+			os.Exit(1)
+		}
+		file = getCurrentBlFile()
+		if file == "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] не найден текущий bl-file: нет запущенных профилей с -bl-file")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "[*] Используется текущий bl-file: %s\n", file)
+	}
+
 	if file == "" {
-		fmt.Fprintln(os.Stderr, "[ERROR] флаг -file обязателен")
+		printBlUsage()
 		os.Exit(1)
 	}
 
@@ -2599,8 +2665,115 @@ func blCmd() {
 		}
 		blFind(args, file)
 	default:
-		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, list, remove, find\n", sub)
+		fmt.Fprintf(os.Stderr, "[ERROR] неизвестная подкоманда '%s'. Доступные: add, list, remove, find, init, load\n", sub)
 		os.Exit(1)
+	}
+}
+
+func blInitCmd(args []string) {
+	path := "qwdtt_bl.json"
+	if len(args) > 0 {
+		path = args[0]
+	}
+
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] файл %q уже существует. Используйте 'qwdtt bl -f %s add <domains...>' для добавления доменов.\n", path, path)
+		os.Exit(1)
+	}
+
+	raw := map[string]json.RawMessage{}
+	if err := saveBypassFile(path, raw, nil, false, true); err != nil {
+		log.Fatalf("Ошибка создания %q: %v", path, err)
+	}
+
+	fmt.Printf("[OK] Создан bl-file: %s (0 доменов)\n", path)
+}
+
+// blLoad hot-reloads the bypass routes file of the currently running qwdtt
+// connection (tun, raw or socks) through the daemon's control socket. The new
+// bl-file replaces the one used at connect time; -bl domains are merged in.
+// No reconnect is required.
+func blLoad(args []string, explicitProfile string) {
+	if len(args) == 0 || args[0] == "" {
+		fmt.Fprintln(os.Stderr, "Usage: qwdtt bl load [-p|--profile PROFILE] <path>  (JSON с полем bypassRoutes)")
+		os.Exit(1)
+	}
+	rawPath := args[0]
+
+	// Validate up front, in the parent process, for friendly errors.
+	if _, err := loadBypassRoutesFile(rawPath); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+	expanded, err := expandPath(rawPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+	abspath, err := filepath.Abs(expanded)
+	if err != nil {
+		abspath = expanded
+	}
+
+	// Locate the running daemon and its control socket.
+	active := getActiveProfile()
+	var socketProfile, targetProfile string
+	if explicitProfile != "" {
+		targetProfile = explicitProfile
+		if active == "autoswitch" && targetProfile == getAutoswitchCurrentProfile() {
+			socketProfile = "autoswitch"
+		} else {
+			socketProfile = targetProfile
+		}
+	} else {
+		if active == "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] нет активного подключения TUN/RAW. Укажите профиль отдельно: qwdtt bl load -p <profile> <path>")
+			os.Exit(1)
+		}
+		socketProfile = active
+		targetProfile = active
+		if active == "autoswitch" {
+			socketProfile = "autoswitch"
+			targetProfile = getAutoswitchCurrentProfile()
+			if targetProfile == "" {
+				fmt.Fprintln(os.Stderr, "[ERROR] авто-переключение активно, но нет подключённого профиля для применения bl-file")
+				os.Exit(1)
+			}
+		}
+	}
+
+	details := getRunningProfileDetails()
+	d, ok := details[targetProfile]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "[ERROR] не удалось определить параметры запущенного профиля %q\n", targetProfile)
+		os.Exit(1)
+	}
+	mode := d.Mode
+	if mode != "tun" && mode != "raw" && mode != "socks" {
+		fmt.Fprintf(os.Stderr, "[ERROR] bl load поддерживается для tun/raw/socks, текущий режим: %q\n", mode)
+		os.Exit(1)
+	}
+
+	sock := socketPath(socketProfile)
+	if _, err := os.Stat(sock); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] сокет демона не найден: %s (демон не запущен?)\n", sock)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[*] Применение bl-file %q к профилю %q (режим %s)...\n", abspath, targetProfile, mode)
+	reply, err := sendBlReload(sock, abspath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	if strings.HasPrefix(reply, "RELOAD_OK|") {
+		fmt.Printf("[OK] %s\n", strings.TrimPrefix(reply, "RELOAD_OK|"))
+	} else if strings.HasPrefix(reply, "RELOAD_ERR|") {
+		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", strings.TrimPrefix(reply, "RELOAD_ERR|"))
+		os.Exit(1)
+	} else {
+		fmt.Printf("[*] Ответ демона: %s\n", reply)
 	}
 }
 
@@ -2625,7 +2798,21 @@ func blList(file string) {
 	fmt.Print(formatDomainsInColumns(displayed, "", "  ", 3))
 }
 
+func validateBlDomains(domains []string) {
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if strings.Contains(d, ",") {
+			fmt.Fprintf(os.Stderr, "[ERROR] домен не может содержать запятую: %q\n", d)
+			os.Exit(1)
+		}
+	}
+}
+
 func blAdd(domains []string, file string) {
+	validateBlDomains(domains)
 	raw, existing, isArray, err := loadBypassForEdit(file)
 	createNew := false
 	if err != nil {
@@ -2672,6 +2859,7 @@ func blAdd(domains []string, file string) {
 }
 
 func blRemove(domains []string, file string, assumeYes bool) {
+	validateBlDomains(domains)
 	if !assumeYes {
 		fmt.Printf("Точно удалить %d домен(а/ов) из %q? [y/N] ", len(domains), file)
 		reader := bufio.NewReader(os.Stdin)
@@ -2733,6 +2921,7 @@ func blRemove(domains []string, file string, assumeYes bool) {
 }
 
 func blFind(queries []string, file string) {
+	validateBlDomains(queries)
 	_, existing, _, err := loadBypassForEdit(file)
 	if err != nil {
 		log.Fatalf("Ошибка чтения %q: %v", file, err)
@@ -2776,13 +2965,28 @@ func blFind(queries []string, file string) {
 }
 
 func subscriptionCmd() {
+	printSubUsage := func() {
+		fmt.Fprintln(os.Stderr, "Usage: qwdtt subscription <add|remove|show|move|update> [options] [names/urls]")
+		fmt.Fprintln(os.Stderr, "  add [name] <url>, rm <name>, sh [name], mv <old> <new>, upd [names...]")
+		fmt.Fprintln(os.Stderr, "  -y, --yes  Skip confirmation prompt")
+		fmt.Fprintln(os.Stderr, "  (alias: qwdtt sub)")
+	}
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: qwdtt subscription <add|remove|show|update> [options]\n")
-		fmt.Fprintln(os.Stderr, "(alias: qwdtt sub)")
+		printSubUsage()
 		os.Exit(1)
 	}
 
-	sub := os.Args[2]
+	sub := ""
+	for _, a := range os.Args[2:] {
+		if a != "-" && !strings.HasPrefix(a, "-") {
+			sub = a
+			break
+		}
+	}
+	if sub == "" {
+		printSubUsage()
+		os.Exit(1)
+	}
 	switch sub {
 	case "add":
 		subscriptionAddCmd()
@@ -2800,13 +3004,23 @@ func subscriptionCmd() {
 	}
 }
 
+// parseSubCmdFlags splits os.Args[2:] into parsed flags and positional args,
+// skipping the subcommand name (first positional arg).
+func parseSubCmdFlags(fs *flag.FlagSet) []string {
+	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
+	if len(args) > 0 {
+		args = args[1:]
+	}
+	fs.Parse(flagArgs)
+	return args
+}
+
 func subscriptionAddCmd() {
 	fs := flag.NewFlagSet("subscription add", flag.ExitOnError)
 	yes := fs.Bool("y", false, "Skip confirmation prompt")
 	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
 
-	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
-	fs.Parse(flagArgs)
+	args := parseSubCmdFlags(fs)
 
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub add <url> [-y]\n")
@@ -2917,8 +3131,7 @@ func subscriptionRemoveCmd() {
 	yes := fs.Bool("y", false, "Skip confirmation prompt")
 	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
 
-	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
-	fs.Parse(flagArgs)
+	args := parseSubCmdFlags(fs)
 
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub rm <name> [-y]\n")
@@ -2973,28 +3186,20 @@ func subscriptionRemoveCmd() {
 }
 
 func subscriptionMoveCmd() {
-	var oldName, newName string
-	args := os.Args[3:]
-	if len(args) == 2 {
-		oldName = args[0]
-		newName = args[1]
-	} else if len(args) == 1 {
-		fs := flag.NewFlagSet("subscription move", flag.ExitOnError)
-		yes := fs.Bool("y", false, "Skip confirmation prompt")
-		fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
-		flagArgs, positional := splitFlagsAndArgs(fs, os.Args[3:])
-		fs.Parse(flagArgs)
-		if len(positional) != 2 {
-			fmt.Fprintf(os.Stderr, "Usage: qwdtt sub mv <old_name> <new_name> [-y]\n")
-			os.Exit(1)
-		}
-		oldName = positional[0]
-		newName = positional[1]
-		_ = yes
-	} else {
+	fs := flag.NewFlagSet("subscription move", flag.ExitOnError)
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+
+	positional := parseSubCmdFlags(fs)
+
+	if len(positional) != 2 {
 		fmt.Fprintf(os.Stderr, "Usage: qwdtt sub mv <old_name> <new_name> [-y]\n")
 		os.Exit(1)
 	}
+
+	oldName := positional[0]
+	newName := positional[1]
+	_ = yes
 
 	if oldName == newName {
 		fmt.Fprintf(os.Stderr, "[ERROR] Old and new names are the same\n")
@@ -3061,8 +3266,14 @@ func subscriptionMoveCmd() {
 }
 
 func subscriptionShowCmd() {
+	fs := flag.NewFlagSet("subscription show", flag.ExitOnError)
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+
+	args := parseSubCmdFlags(fs)
+	_ = yes
+
 	var name string
-	args := os.Args[3:]
 	if len(args) > 0 {
 		name = args[0]
 	}
@@ -3150,8 +3361,7 @@ func subscriptionUpdateCmd() {
 	yes := fs.Bool("y", false, "Skip confirmation prompt")
 	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
 
-	flagArgs, args := splitFlagsAndArgs(fs, os.Args[3:])
-	fs.Parse(flagArgs)
+	args := parseSubCmdFlags(fs)
 
 	var names []string
 	if len(args) == 0 {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/things-go/go-socks5"
@@ -16,15 +17,33 @@ import (
 )
 
 type WireproxyRunner struct {
-	tun            *wireproxy.VirtualTun
-	cancel         context.CancelFunc
-	socksPort      int
-	socksUser      string
-	socksPass      string
-	config         *wireproxy.Configuration
-	socksListener  net.Listener
-	bypassDomains  []string
-	bypassIPs      []string
+	mu            sync.RWMutex
+	tun           *wireproxy.VirtualTun
+	cancel        context.CancelFunc
+	socksPort     int
+	socksUser     string
+	socksPass     string
+	config        *wireproxy.Configuration
+	socksListener net.Listener
+	bypassDomains []string
+	bypassIPs     []string
+}
+
+// SetBypass updates the bypass lists used by the SOCKS5 dial interceptor at
+// runtime, without restarting the wireproxy SOCKS5 server. Domains are matched
+// by suffix on each new connection; IPs give an exact-match shortcut.
+func (w *WireproxyRunner) SetBypass(domains, ips []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.bypassDomains = domains
+	w.bypassIPs = ips
+}
+
+// bypassSnapshot returns a consistent copy of the current bypass lists.
+func (w *WireproxyRunner) bypassSnapshot() (domains, ips []string) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.bypassDomains, w.bypassIPs
 }
 
 func NewWireproxyRunner(socksPort int, socksUser, socksPass string, bypassDomains, bypassIPs []string) *WireproxyRunner {
@@ -136,26 +155,23 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 			}
 
 			var options []socks5.Option
-			if len(w.bypassDomains) > 0 || len(w.bypassIPs) > 0 {
-				directDialer := &net.Dialer{Timeout: 30 * time.Second, Control: nil}
-				options = []socks5.Option{
-					socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, req *socks5.Request) (net.Conn, error) {
-						if shouldBypass(req, w.bypassDomains, w.bypassIPs) {
-							return directDialer.DialContext(ctx, network, addr)
-						}
-						return tun.Tnet.DialContext(ctx, network, addr)
-					}),
-					socks5.WithResolver(tun),
-					socks5.WithAuthMethods(authMethods),
-					socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
-				}
-			} else {
-				options = []socks5.Option{
-					socks5.WithDial(tun.Tnet.DialContext),
-					socks5.WithResolver(tun),
-					socks5.WithAuthMethods(authMethods),
-					socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
-				}
+
+			// Always install the bypass-aware dial handler so that hot-reloaded
+			// bypass lists (via SetBypass / bl load) take effect without a
+			// restart. When the lists are empty, shouldBypass returns false and
+			// all traffic flows through the tunnel — same behavior as the
+			// previous plain-dial path.
+			directDialer := &net.Dialer{Timeout: 30 * time.Second, Control: nil}
+			options = []socks5.Option{
+				socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, req *socks5.Request) (net.Conn, error) {
+					if bd, bip := w.bypassSnapshot(); shouldBypass(req, bd, bip) {
+						return directDialer.DialContext(ctx, network, addr)
+					}
+					return tun.Tnet.DialContext(ctx, network, addr)
+				}),
+				socks5.WithResolver(tun),
+				socks5.WithAuthMethods(authMethods),
+				socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
 			}
 
 			server := socks5.NewServer(options...)

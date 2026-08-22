@@ -174,12 +174,18 @@ _qwdtt_completions() {
             ;;
          bl)
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
-                COMPREPLY=( $(compgen -W "add list ls remove rm find fd" -- "$cur") )
-            elif [[ $prev == "-file" || $prev == "--file" ]]; then
-                COMPREPLY=( $(compgen -f -- "$cur") )
-            elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-file --file -y" -- "$cur") )
-            fi
+                 COMPREPLY=( $(compgen -W "init add list ls remove rm find fd load" -- "$cur") )
+             elif [[ $prev == "-file" || $prev == "--file" ]]; then
+                 COMPREPLY=( $(compgen -f -- "$cur") $(compgen -d -- "$cur") )
+             elif [[ $prev == "-profile" || $prev == "--profile" ]]; then
+                 COMPREPLY=( $(compgen -W "$(qwdtt __complete_enabled 2>/dev/null)" -- "$cur") )
+             elif [[ $cur == -* ]]; then
+                 COMPREPLY=( $(compgen -W "-file --file -c --current -y -profile --profile" -- "$cur") )
+             elif [[ $COMP_CWORD -ge 3 && $cur != -* ]]; then
+                 if [[ "${COMP_WORDS[2]}" == "init" || "${COMP_WORDS[2]}" == "load" ]]; then
+                     COMPREPLY=( $(compgen -f -- "$cur") $(compgen -d -- "$cur") )
+                 fi
+             fi
             ;;
         subscription|sub)
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then

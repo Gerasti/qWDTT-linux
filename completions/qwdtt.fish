@@ -73,9 +73,13 @@ complete -c qwdtt -n __fish_use_subcommand -a import -d "Import profiles from JS
 complete -c qwdtt -n __fish_use_subcommand -a bl -d "Manage bypass routes file domains"
 complete -c qwdtt -n __fish_use_subcommand -a subscription -d "Manage subscriptions"
 # bl subcommands (offered right after 'qwdtt bl')
-complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -eq 2" -f -a "add list remove find" -d "bl subcommand"
+complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -eq 2" -f -a "init add list remove find load" -d "bl subcommand"
 complete -c qwdtt -n "__qwdtt_seen_command bl" -l file -r -d "Path to bypass routes JSON file"
 complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = remove" -s y -l y -d "Skip confirmation prompt (remove only)"
+complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = init" -f -a "(__fish_complete_path)" -d "Path to new bypass routes JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = load" -f -a "(__fish_complete_path)" -d "Path to bypass routes JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -s c -l current -d "Use current running profile's bl-file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -s p -l profile -f -a "(__qwdtt_profiles)" -d "Target a specific running profile's bl-file"
 # import: file path + dry-run flag
 complete -c qwdtt -n "__qwdtt_seen_command import" -a "(__fish_complete_path)" -d "Path to profile JSON or ZIP file"
 complete -c qwdtt -n "__qwdtt_seen_command import" -l dry-run -d "Show what would be imported without saving"
@@ -85,7 +89,13 @@ complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a add -d "Add domains to bypa
 complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a list -d "List bypass route domains"
 complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a remove -d "Remove domains from bypass file"
 complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a find -d "Check domains in bypass file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a init -d "Create new bypass routes file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -f -a load -d "Hot-reload bl-file for running connection"
+complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = init" -f -a "(__fish_complete_path)" -d "Path to new bypass routes JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = load" -f -a "(__fish_complete_path)" -d "Path to bypass routes JSON file"
 complete -c qwdtt -n "__qwdtt_seen_command bl" -s f -l file -r -d "Path to bypass routes JSON file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -s c -l current -d "Use current running profile's bl-file"
+complete -c qwdtt -n "__qwdtt_seen_command bl" -s p -l profile -f -a "(__qwdtt_profiles)" -d "Target a specific running profile's bl-file"
 complete -c qwdtt -n "__qwdtt_seen_command bl; and test (count (commandline -opc)) -ge 3; and test (commandline -opc)[3] = remove" -s y -l y -d "Skip confirmation prompt (remove only)"
 # import: positional file path + dry-run flag
 complete -c qwdtt -n "__qwdtt_seen_command import" -a "(__fish_complete_path)" -d "Path to profile JSON or ZIP file"

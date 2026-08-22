@@ -167,6 +167,21 @@ func parseQwdttConfigURL(raw string) (*WdttLink, error) {
 	}, nil
 }
 
+func parseLinkWithHint(rawURL string) (*WdttLink, error) {
+	link, err := parseLink(rawURL)
+	if err == nil {
+		return link, nil
+	}
+
+	if strings.HasPrefix(rawURL, "qwdtt://config") {
+		return nil, fmt.Errorf("%w\n==========\nподсказка для bash: символ & в URL интерпретируется как оператор фонового выполнения.\n"+
+			"Оберните URL в кавычки, например:\n"+
+			"  qwdtt add 'qwdtt://config?name=Имя&peer=IP:PORT&pass=Пароль&...'\n==========\n", err)
+	}
+
+	return nil, err
+}
+
 // parseLink определяет схему ссылки и делегирует парсинг
 // соответствующей функции. Поддерживает wdtt:// и qwdtt://config?...
 func parseLink(raw string) (*WdttLink, error) {

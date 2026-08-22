@@ -64,11 +64,29 @@ func (cs *CaptchaSocket) handleConn(conn net.Conn) {
 			}
 			break
 		}
+		if strings.HasPrefix(line, "BL_RELOAD|") {
+			newFile := strings.TrimPrefix(line, "BL_RELOAD|")
+			fmt.Fprintf(conn, "%s\n", handleBlReload(newFile))
+			break
+		}
 	}
 }
 
 func (cs *CaptchaSocket) SolveChan() <-chan string {
 	return cs.solveCh
+}
+
+// handleBlReload re-applies the bypass routes for the running daemon from the
+// new bl-file (the -bl value is taken from daemonReloadCtx). It is invoked by
+// the BL_RELOAD control command over the daemon's unix socket.
+func handleBlReload(newFile string) string {
+	summary, err := reloadSplitRoutes(daemonMode, daemonBlRaw, daemonProfileName, newFile)
+	if err != nil {
+		fmt.Printf("[ERROR] reload bl: %v\n", err)
+		return "RELOAD_ERR|" + err.Error()
+	}
+	fmt.Printf("[OK] %s\n", summary)
+	return "RELOAD_OK|" + summary
 }
 
 func (cs *CaptchaSocket) Stop() {
@@ -92,6 +110,32 @@ func sendCaptchaResult(socketPath, result string) error {
 		return fmt.Errorf("failed to send result: %w", err)
 	}
 	return nil
+}
+
+// sendBlReload sends a BL_RELOAD control command to the running daemon over its
+// unix socket and returns the daemon's reply line (e.g. "RELOAD_OK|...").
+func sendBlReload(sockPath, abspath string) (string, error) {
+	conn, err := net.DialTimeout("unix", sockPath, 3*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("не удалось подключиться к сокету демона %q: %w", sockPath, err)
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintf(conn, "BL_RELOAD|%s\n", abspath); err != nil {
+		return "", fmt.Errorf("не удалось отправить команду демону: %w", err)
+	}
+
+	scanner := bufio.NewScanner(conn)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("ошибка чтения ответа от демона: %w", err)
+	}
+	return "", fmt.Errorf("демон не ответил (соединение закрыто)")
 }
 
 // ForwardStdinToSocket reads CAPTCHA_RESULT lines from stdin and forwards them

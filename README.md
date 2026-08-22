@@ -66,8 +66,8 @@ in
 
     enableBashIntegration = true;
     enableFishIntegration = true;
-    # wrappers.enable = true;  # по умолчанию уже true
-    # wrappers.group = "users";  # группа, которая может запускать wrapped бинарники
+    # wrappers.enable = true;  # defaults to true
+    # wrappers.group = "users";  # a group that can run wrapped binaries
   };
 }
 ```
@@ -137,8 +137,8 @@ cp completions/qwdtt.fish ~/.config/fish/completions/
 
 ```bash
 # Установить Go (если ещё не установлен)
-wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Собрать из исходников
@@ -159,13 +159,14 @@ sudo setcap cap_net_admin+eip qwdtt
 
 ```bash
 # Добавить профиль (wdtt:// ссылка)
-qwdtt add myserver "wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2"
+qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2
 
 # Добавить профиль (qwdtt://config ссылка — более гибкий формат с query-параметрами)
-qwdtt add myserver "qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret"
+# ВАЖНО: для bash обязательно закавычивайте URL с & — иначе bash разобьёт команду
+qwdtt add "qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret"
 
 # Добавить профиль по qwdtt://config ссылке (имя берётся из параметра name)
-qwdtt add "qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret"
+qwdtt add 'qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&hashes=hash1,hash2&workers=18&port=9000&pass=secret'
 
 # Импорт профилей из JSON или ZIP (например, экспорт из мобильного клиента)
 qwdtt import /path/to/profiles.json
@@ -186,6 +187,9 @@ qwdtt con myserver -dns doh:https://dns.example.com/dns-query
 # Debug информация о подключении
 qwdtt debug
 # или watch -n 1 qwdtt debug
+
+# Тестирование работоспособности
+qwdtt test myserver
 
 # Просмотр лога профиля (последние 20 строк)
 qwdtt log estoniya -n 20
@@ -232,9 +236,9 @@ qwdtt disconnect [profile]           - Отключиться от VPN (alias: d
 qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg; без профиля — autoswitch или активный)
 qwdtt share <name> [-qwdtt|-q] [-group GROUP] - Показать share-ссылку и QR-код (-qwdtt/-q: qwdtt://config? формат)
 qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
-qwdtt test [profile1 ...] [флаги]    - Тестировать подключение (VKAuth, Workers, Connect, InternetCheck; без аргументов — все профили)
+qwdtt test [profile1 or link...] [флаги]    - Тестировать подключение (VKAuth, Workers, Connect, InternetCheck; без аргументов — все профили)
                                        Аргументы: имена профилей, маски, wdtt:// и qwdtt:// ссылки
-qwdtt add <name> <wdtt://...|qwdtt://config?name=...> - Добавить профиль
+qwdtt add <name> <wdtt://... или "qwdtt://config?name=..."> - Добавить профиль
 qwdtt edit <name1> [name2] ... [флаги]  - Редактировать профили (флаги применяются ко всем)
 qwdtt move <old_name> <new_name>      - Переименовать профиль (alias: mv)
 qwdtt remove <name1> [name2] ...     - Удалить профили (alias: rm, запрашивает подтверждение, -y/-yes — без него)
@@ -257,14 +261,16 @@ qwdtt rm 'wdtt_*'                    - Удалить все профили, н�
 qwdtt rm 'wdtt_*' -y                 - То же без подтверждения
 qwdtt test 'wdtt_*'                  - Протестировать все профили по маске
 # ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
-# (в fish ошибка "No matches for wildcard" — это ошибка шелла, решается кавычками)
 qwdtt import <file.json|file.zip> [--dry-run] - Импортировать профили из JSON или ZIP (--dry-run: просмотр без сохранения)
-qwdtt bl <add|list|remove|find> [-file PATH] - Управление списком обхода туннеля (bypass routes) в JSON-файле
+qwdtt bl <add|list|remove|find|init|load> [-file PATH] - Управление списком обхода туннеля (bypass routes) в JSON-файле
   bl list (ls)             - Показать все домены из файла
-  bl add <d1> [d2...]      - Добавить домены/IP в файл
-  bl remove (rm) <d1> [d2...] [-y] - Удалить домены из файла
-  bl find (fd) <d1> [d2...] - Проверить, есть ли домены в файле
-                                Флаг -file/-f PATH обязателен (можно указывать ~ и $ENV)
+  bl add <d1> [d2...]      - Добавить домена/IP в файл
+  bl remove (rm) <d1> [d2...] [-y] - Удалить домена из файла
+  bl find (fd) <d1> [d2...] - Проверить, есть ли домена в файле
+  bl init [PATH]           - Создать новый bl-file (по умолчанию: qwdtt_bl.json в текущей директории)
+  bl load <path>           - Подменить/включить bl-file для уже запущенного tun/raw/socks соединения БЕЗ переподключения
+                             (домены сливаются с -bl; -file/-f PATH обязательны для add/remove/find/list/init)
+                             Флаг -c/--current использует bl-file текущего запущенного профиля вместо -file
 qwdtt subscription <add|remove|show|move|update> [флаги] - Управление подписками (alias: sub)
   add <url>                    - Добавить подписку (имя берётся из JSON subscriptionName)
   add <name> <url>             - Добавить подписку с явным именем
@@ -344,6 +350,11 @@ qwdtt bl rm vk.ru -file ./qwdtt_bypass_sites.json
 
 # Проверить, есть ли домены в файле
 qwdtt bl find yandex.ru -file ./qwdtt_bypass_sites.json   # alias: fd
+
+# Подменить bl-file у уже запущенного соединения (tun/raw/socks) без переподключения
+qwdtt con myserver -bl-file ./qwdtt_bypass_sites.json
+qwdtt bl load ./qwdtt_bypass_sites_2.json              # заменить bl-file на лету
+qwdtt debug                                           # увидеть новые split_routes
 ```
 
 - Флаг `-file PATH` (или `-f`) обязателен. Поддерживаются `~` и переменные окружения (`$ENV`) в пути.
@@ -435,12 +446,20 @@ qwdtt://config?name=Имя&peer=IP:DTLSPort&hashes=hash1,hash2&workers=18&port=9
 Параметры:
 - `name` — имя профиля (обязательно для `qwdtt add <URL>`)
 - `peer` — адрес сервера в формате `IP:PORT` (обязательно)
-- `hashes` — VK хеши через запятую
+- `hashes` — VK хеши через запятую (один обязателен)
 - `workers` — количество воркеров (по умолчанию 9)
 - `port` — локальный порт прослушивания (по умолчанию 9000)
 - `pass` — пароль (обязательно)
 
 Оба формата поддерживаются в командах `add`, `test` и для `share -qwdtt` (alias `-q`).
+
+> **Важно для bash**: ссылка **qwdtt://config?** содержит символы `&`, которые bash интерпретирует как оператор фонового выполнения. **Обязательно закавычивайте** URL в кавычки:
+> ```bash
+> # Правильно (одинарные кавычки):
+> qwdtt add 'qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&pass=secret'
+> qwdtt test 'qwdtt://config?name=МойСервер&peer=1.2.3.4:56000&pass=secret'
+> ```
+> В fish или zsh эта проблема отсутствует.
 </details>
 
 ## Управление профилями
@@ -564,7 +583,7 @@ qwdtt sub rm "Qubit VPN" -y
 
 - Linux
 - `iputils` (ping), `curl`
-- `cap_net_admin` capabilities
+- `cap_net_admin` capabilities (иначе будет доступен только socks)
 - systemd (для suspend/resume)
 - D-Bus session bus (для уведомлений)
 - Версия ядра => 4.14 (MSS clamp, стабильность для режима Raw)

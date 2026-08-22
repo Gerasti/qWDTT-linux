@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -82,8 +83,62 @@ func (s *switchProfileSignal) trigger() {
 	s.ch = make(chan struct{})
 }
 
+// activeWireproxy holds the currently running SOCKS5 wireproxy runner (socks
+// mode) so that the bypass routes can be hot-reloaded without a restart.
+// It is nil for tun/raw modes (where bypass is implemented via kernel routes).
+var activeWireproxy atomic.Pointer[core.WireproxyRunner]
+
+// daemonReloadCtx holds connection parameters captured by the daemon child so
+// that the control socket's BL_RELOAD handler can re-apply bypass routes.
+var (
+	daemonMode        string // "tun" | "raw" | "socks"
+	daemonBlRaw       string // raw -bl value (space-separated domains)
+	daemonProfileName string // daemon profile name for PID/socket files
+)
+
+// hasCapNetAdmin reports whether the current process has cap_net_admin in
+// its effective capability set. Root (uid 0) is always considered to have it.
+func hasCapNetAdmin() bool {
+	if os.Geteuid() == 0 {
+		return true
+	}
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "CapEff:") {
+			var caps uint64
+			if _, err := fmt.Sscanf(line, "CapEff:\t%x", &caps); err != nil {
+				return false
+			}
+			// CAP_NET_ADMIN = 12 on Linux
+			return caps&(1<<12) != 0
+		}
+	}
+	return false
+}
+
+// checkTunRawCapabilities verifies that the process has cap_net_admin
+// (or is root) before attempting to create a kernel TUN/WireGuard interface.
+// Exits the process with an error message if the capability is missing.
+func checkTunRawCapabilities(mode string) {
+	if mode == "socks" {
+		return
+	}
+	if hasCapNetAdmin() {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "[ERROR] для режима "+mode+" требуется cap_net_admin, а текущий процесс его не имеет.")
+	fmt.Fprintln(os.Stderr, "'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
+	fmt.Fprintln(os.Stderr, "или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
+	fmt.Fprintln(os.Stderr, "P.S. --mode socks не требует ни root, ни cap_net_admin+eip")
+	os.Exit(1)
+}
+
 func connectCmd() {
 	var profileName string
+	var positionalDomains []string
 
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	workers := fs.Int("workers", 9, "Number of workers")
@@ -99,15 +154,17 @@ func connectCmd() {
 	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default udp). Use tcp where UDP is blocked")
 	logFlag := fs.Bool("log", false, "Показывать лог демона в терминале в реальном времени")
 	autoStop := fs.Bool("toggle", false, "Stop running profile, or start if not running")
-	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Comma-separated. TUN mode only")
-	fs.StringVar(blackList, "bl", "", "Alias for --black-list")
+	blackList := fs.String("black-list", "", "Black-list domains: these go direct (rest through tunnel). Space-separated. TUN mode only")
+	fs.StringVar(blackList, "bl", "", "Alias for --black-list (domains can be space-separated positional args)")
 	blackListFile := fs.String("black-list-file", "", "Read black-list domains from JSON file (bypassRoutes field). Can combine with -bl. TUN mode only")
 	fs.StringVar(blackListFile, "bl-file", "", "Alias for --black-list-file")
 	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
-		fs.Parse(os.Args[2:])
+		flagArgs, blPositional := splitFlagsAndArgs(fs, os.Args[2:])
+		fs.Parse(flagArgs)
+		positionalDomains = blPositional
 
 		if !*autoSwitch {
 			profileName = selectProfileInteractive()
@@ -117,7 +174,9 @@ func connectCmd() {
 		}
 	} else {
 		profileName = os.Args[2]
-		fs.Parse(os.Args[3:])
+		flagArgs, blPositional := splitFlagsAndArgs(fs, os.Args[3:])
+		fs.Parse(flagArgs)
+		positionalDomains = blPositional
 	}
 
 	daemonProfile := profileName
@@ -130,7 +189,7 @@ func connectCmd() {
 
 	// --- Split tunneling validation (before daemonizing) ---
 	var splitCfg *splitTunnelConfig
-	if *blackList != "" || *blackListFile != "" {
+	if *blackList != "" || *blackListFile != "" || len(positionalDomains) > 0 {
 		if *mode != "tun" && *mode != "raw" && *mode != "socks" {
 			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режимах -mode tun, -mode raw или -mode socks")
 			os.Exit(1)
@@ -156,7 +215,15 @@ func connectCmd() {
 				}
 			}
 		}
-		blDomains := splitDomains(*blackList)
+		combinedBl := *blackList
+		if len(positionalDomains) > 0 {
+			if combinedBl != "" {
+				combinedBl += " " + strings.Join(positionalDomains, " ")
+			} else {
+				combinedBl = strings.Join(positionalDomains, " ")
+			}
+		}
+		blDomains := splitDomains(combinedBl)
 		if *blackListFile != "" {
 			fileDomains, err := loadBypassRoutesFile(*blackListFile)
 			if err != nil {
@@ -165,7 +232,7 @@ func connectCmd() {
 			}
 			blDomains = append(blDomains, fileDomains...)
 		}
-		splitCfg = &splitTunnelConfig{mode: "blacklist", domains: blDomains, rawBl: *blackList, rawFile: *blackListFile}
+		splitCfg = &splitTunnelConfig{mode: "blacklist", domains: blDomains, rawBl: combinedBl, rawFile: *blackListFile}
 	}
 
 	// Validate profile exists before daemonizing so we can report errors cleanly
@@ -331,6 +398,11 @@ func connectCmd() {
 		}
 	}
 
+	// Pre-flight: tun/raw modes need cap_net_admin to create a kernel
+	// interface. Check early (before daemonizing) so the user gets a
+	// clear error instead of a delayed failure after VKAuth.
+	checkTunRawCapabilities(*mode)
+
 	dm := newDaemonManager(daemonProfile, *autoSwitch)
 	_, isChild, err := dm.Start()
 	if err != nil {
@@ -398,6 +470,9 @@ func connectCmd() {
 	}()
 
 	_ = done
+	daemonMode = *mode
+	daemonBlRaw = *blackList
+	daemonProfileName = dm.daemonProfileName()
 	cs := newCaptchaSocket(dm.daemonProfileName())
 	if err := cs.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "[WARNING] Не удалось запустить socket для капчи: %v\n", err)
@@ -509,9 +584,6 @@ func connectCmd() {
 
 				if fatalErr && *autoSwitch {
 					fmt.Println("[ERROR] Критическая ошибка при настройке туннеля — авто-переключение остановлено.")
-					fmt.Println("Убедитесь, что проверка 'getcap /path/to/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
-					fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
-					fmt.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
 					cleanupPidFile(daemonProfile)
 					removeSplitCfg(daemonProfile)
 					_ = teardownWG()
@@ -687,6 +759,7 @@ func tryConnectProfile(
 		if wr != nil {
 			wr.Stop()
 		}
+		activeWireproxy.Store(nil)
 	}
 
 	for {
@@ -842,6 +915,7 @@ func tryConnectProfile(
 							return false, false, false
 						}
 						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						activeWireproxy.Store(wr)
 						if splitCfg != nil && len(splitCfg.domains) > 0 {
 							fmt.Printf("[*] Split tunnel (blacklist): %d доменов, %d IP напрямую\n",
 								len(splitCfg.domains), len(bypassIPs))
@@ -867,9 +941,6 @@ func tryConnectProfile(
 						if err := applyWGConfig(ev.Data, turnIPs, splitCfg); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
-							fmt.Println("Убедитесь, что 'getcap /run/wrappers/bin/qwdtt' показывает 'cap_net_admin=eip', иначе сделайте:")
-							fmt.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
-							fmt.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
 							c.Stop()
 							teardownWG()
 							if !skipActiveProfileClear {

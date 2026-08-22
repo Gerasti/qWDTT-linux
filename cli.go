@@ -14,22 +14,24 @@ func printUsage() {
 Usage:  qwdtt [OPTIONS] COMMAND
 
 Profile Management:
-  add <name> <wdtt://... or qwdtt://config?name=...>  Add or renew a profile
+  add <name> <wdtt://... or "qwdtt://config?name=...">  Add or renew a profile
   edit <name1> [name2] ...    Edit existing profiles, same flags apply to all (alias: none)
                               -group GROUP: edit all profiles in the group
   remove <name1> [name2] ...  Remove profiles (alias: rm)
                                -group GROUP: remove all profiles in the group
                                -y/-yes: skip confirmation prompt
-  move <old_name> <new_name>  Rename a profile (alias: mv)
+
   edit/remove/show/enable/disable/test also accept glob masks, e.g. rm 'wdtt_*'
+
+  move <old_name> <new_name>  Rename a profile (alias: mv)
                               (quote the mask to avoid shell globbing)
-   list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
+  list [<group1> ...] [flags] Show profiles, optionally filtered by group(s) (alias: ls)
                                 -en/-enabled: enabled only
                                 -dis/-disabled: disabled only
                                 -ro: read-only profiles only
                                 -sub: subscription-managed profiles only
                                 -active: running profiles only
-   show <name1> [name2] ...    Show profile details (alias: sh)
+  show <name1> [name2] ...    Show profile details (alias: sh)
                                -group GROUP: show all profiles in the group
                                -sub: show all profiles managed by any subscription
   share <name> [-qwdtt|-q] [-group GROUP]  Show profile share link and QR code
@@ -50,7 +52,11 @@ Profile Management:
   bl add <d1> [d2...]       Add domains to bypass routes file
   bl remove <d1> [d2...]    Remove domains from bypass routes file
   bl find <d1> [d2...]      Check if domains exist in bypass routes file
-                                All bl subcommands require -file PATH
+  bl init [PATH]            Create new bypass routes file (default: qwdtt_bl.json)
+  bl load <path>            Hot-reload bl-file for the running tun/raw/socks connection
+                                  (replaces current bl-file, -bl domains merged, NO reconnect)
+                                  -p, --profile PROFILE  target a specific profile explicitly (for socks/autoswitch)
+                                All bl subcommands (except init, load) require -file PATH or -c/--current
 
 Subscription:
   subscription <add|remove|show|move|update>  Manage subscriptions (alias: sub)
@@ -71,10 +77,10 @@ Connection:
                                -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s) (alias: deb)
                                (e.g., watch -n 1 qwdtt debug)
-   test [profile1 ...] [--ro] [--enabled] [--disabled] [--group GROUP] [--sub]
+  test [profile1 or link...] [--ro] [--enabled] [--disabled] [--group GROUP] [--sub]
                                  Test profile(s) connectivity (VKAuth, Workers, Connect, InternetCheck)
                                  Without args: test all profiles
-                                 Each arg can be a profile name or wdtt://, qwdtt:// links
+                                 Each arg can be a profile name or wdtt://, "qwdtt://" links
                                 -ro: test only read-only profiles
                                 -enabled/-en: test only enabled profiles
                                 -disabled/-dis: test only disabled profiles
@@ -125,8 +131,9 @@ Connect Flags:
                                  Use tcp where UDP to the TURN relay is blocked
   -log                        Show daemon log output in terminal in real-time
   -toggle                     Stop running profile, or start if not running
-  -bl DOMAINS or IP, --black-list   These domains go direct; everything else goes through tunnel
-                                Comma-separated, e.g. -bl vk.ru,yandex.ru (tun, socks, raw modes)
+   -bl DOMAINS, --black-list   These domains go direct; everything else goes through tunnel
+                                 Space-separated, e.g. -bl vk.ru yandex.ru (tun, socks, raw modes)
+                                 Domains can also be passed as positional args after -bl
   -bl-file PATH, --black-list-file  Read domains from JSON file (bypassRoutes field). Can combine with -bl
                                 e.g. -bl-file ./qwdtt_bypass_sites.json (tun, socks, raw modes)
 
@@ -142,7 +149,7 @@ Edit Flags:
 
 Examples:
   qwdtt add myserver wdtt://1.2.3.4:56000:56001:0:pass:hash1,hash2#MyServer
-  qwdtt add qwdtt://config?name=myserver&peer=1.2.3.4:56000&hashes=h1,h2&workers=18&port=9000&pass=secret
+  qwdtt add 'qwdtt://config?name=myserver&peer=1.2.3.4:56000&hashes=h1,h2&workers=18&port=9000&pass=secret'
   qwdtt con                        # interactive profile selection
   qwdtt con myserver               # connect to profile
   qwdtt con myserver --toggle      # with stop if run, start if not
@@ -201,6 +208,7 @@ Examples:
   qwdtt sub show                     # list all subscriptions
   qwdtt sub update "My VPN"          # update profiles from subscription
   qwdtt sub rm "My VPN" -y           # remove subscription and all profiles
+  qwdtt --version/version
 `, version)
 }
 

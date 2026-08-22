@@ -20,7 +20,7 @@ const workersPerGroup = 9
 // несколько воркеров накладываются друг на друга и вместе выжигают VK-квоту
 // (error 486) быстрее, чем должны. Тот же приём использует
 // free-turn-proxy (internal/proxy/udprelay/loop.go).
-const allocateGateInterval = 200 * time.Millisecond
+const allocateGateInterval = 100 * time.Millisecond
 
 // WorkersPerGroup — количество воркеров в одной группе (экспортировано для orchestrator).
 const WorkersPerGroup = workersPerGroup
@@ -164,7 +164,7 @@ func WorkerGroup(
 	// Сигнализируем следующей группе, что мы успешно запустились (креды получены + фора)
 	if signalReady != nil {
 		go func() {
-			delayMs := 1000 + rand.Intn(500)
+			delayMs := 500 + rand.Intn(250)
 			select {
 			case <-time.After(time.Duration(delayMs) * time.Millisecond):
 				if ctx.Err() == nil {
@@ -179,8 +179,7 @@ func WorkerGroup(
 	for i, wid := range workerIDs {
 		wg.Add(1)
 
-		// Stagger: 200мс между воркерами
-		workerDelay := time.Duration(i) * 200 * time.Millisecond
+		workerDelay := time.Duration(i) * 75 * time.Millisecond
 
 		go func(wid int, delay time.Duration) {
 			defer wg.Done()

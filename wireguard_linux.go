@@ -26,10 +26,9 @@ import (
 
 const wgIface = "wg-qwdtt"
 
-
-
 var routedTurnIPs []string
 var splitRoutes []string
+var splitRoutesMu sync.Mutex
 
 type splitTunnelConfig struct {
 	mode    string
@@ -398,6 +397,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 
 		// Blacklist: более специфичные маршруты через прямой шлюз (обход туннеля)
 		if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitIPs) > 0 {
+			splitRoutesMu.Lock()
 			for _, ip := range splitIPs {
 				cidr := toCIDRRoute(ip)
 				if e := routeViaGateway(cidr, gateway); e != nil {
@@ -406,6 +406,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 				}
 				splitRoutes = append(splitRoutes, cidr)
 			}
+			splitRoutesMu.Unlock()
 		}
 	}
 
@@ -454,10 +455,96 @@ func teardownWG() error {
 }
 
 func clearSplitRoutes() {
+	splitRoutesMu.Lock()
+	defer splitRoutesMu.Unlock()
 	for _, cidr := range splitRoutes {
 		_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
 	}
 	splitRoutes = nil
+}
+
+// dedupKeepOrder returns the unique items of src, preserving first-seen order.
+func dedupKeepOrder(src []string) []string {
+	seen := make(map[string]struct{}, len(src))
+	out := make([]string, 0, len(src))
+	for _, s := range src {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// reloadSplitRoutes re-applies bypass routes for the running daemon from the
+// raw -bl value and (optionally) a new bypass routes JSON file, replacing
+// whatever was active before. For tun/raw it manipulates kernel routes through
+// the default gateway; for socks it updates the live wireproxy runner via the
+// activeWireproxy atomic pointer (no restart). Returns a summary string.
+func reloadSplitRoutes(mode, blRaw, daemonProfile, newFile string) (string, error) {
+	profile := daemonProfile
+	if daemonProfile == "autoswitch" {
+		profile = getAutoswitchCurrentProfile()
+		if profile == "" {
+			return "", fmt.Errorf("autoswitch is active, but no current profile is connected")
+		}
+	}
+
+	domains := splitDomains(blRaw)
+	if newFile != "" {
+		fileDomains, err := loadBypassRoutesFile(newFile)
+		if err != nil {
+			return "", fmt.Errorf("bl-file: %w", err)
+		}
+		domains = append(domains, fileDomains...)
+	}
+	domains = dedupKeepOrder(domains)
+
+	switch mode {
+	case "socks":
+		wr := activeWireproxy.Load()
+		if wr == nil {
+			return "", fmt.Errorf("no active SOCKS5 runner for profile %q", profile)
+		}
+		wr.SetBypass(domains, nil)
+		_ = writeSplitCfg(profile, blRaw, newFile, nil)
+		return fmt.Sprintf("socks: bypass list updated (%d domains)", len(domains)), nil
+
+	case "tun", "raw":
+		var ips []string
+		if len(domains) > 0 {
+			ips, _ = resolveDomainIPs(domains) // per-domain resolution errors are non-fatal
+		}
+		gateway := defaultGateway()
+
+		splitRoutesMu.Lock()
+		for _, cidr := range splitRoutes {
+			_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
+		}
+		splitRoutes = nil
+		var routes []string
+		if gateway != nil {
+			for _, ip := range ips {
+				cidr := toCIDRRoute(ip)
+				if e := routeViaGateway(cidr, gateway); e != nil {
+					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
+					continue
+				}
+				routes = append(routes, cidr)
+				splitRoutes = append(splitRoutes, cidr)
+			}
+		} else {
+			fmt.Println("[WARNING] default gateway not found, bypass routes not applied")
+		}
+		splitRoutesMu.Unlock()
+
+		_ = writeSplitCfg(profile, blRaw, newFile, routes)
+		return fmt.Sprintf("%s: bypass routes updated (%d domains, %d routes)", mode, len(domains), len(routes)), nil
+
+	default:
+		return "", fmt.Errorf("unsupported mode %q", mode)
+	}
 }
 
 func rawIfaceActive() bool {
@@ -511,6 +598,7 @@ func applyRawSplitTunnel(splitCfg *splitTunnelConfig) {
 		return
 	}
 	fmt.Printf("[*] Split tunnel (blacklist): %d IP напрямую\n", len(ips))
+	splitRoutesMu.Lock()
 	for _, ip := range ips {
 		cidr := toCIDRRoute(ip)
 		if e := routeViaGateway(cidr, gateway); e != nil {
@@ -519,6 +607,7 @@ func applyRawSplitTunnel(splitCfg *splitTunnelConfig) {
 		}
 		splitRoutes = append(splitRoutes, cidr)
 	}
+	splitRoutesMu.Unlock()
 }
 
 // testRawConnectivity пингует внешние хосты через raw TUN интерфейс.

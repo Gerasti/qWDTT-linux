@@ -96,7 +96,7 @@ type WGStats struct {
 func getWGStats(iface string) (*WGStats, error) {
 	data, err := os.ReadFile("/sys/class/net/" + iface + "/statistics/rx_bytes")
 	if err != nil {
-		return nil, fmt.Errorf("интерфейс не найден")
+		return nil, fmt.Errorf("интерфейс TUN/RAW не найден")
 	}
 	rxBytes, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 
@@ -262,7 +262,7 @@ type ProfileDetails struct {
 	SocksUser     string   // SOCKS5 username (if specified via -socks-user)
 	SocksPass     string   // SOCKS5 password (if specified via -socks-password)
 	PID           int      // Process PID
-	BlackList     string   // raw -bl / --black-list value (comma-separated domains)
+	BlackList     string   // raw -bl / --black-list value (space-separated domains)
 	BlackListFile string   // path to -bl-file / --black-list-file JSON file
 	SplitRoutes   []string // resolved bypass route CIDRs (from state file)
 }
@@ -448,14 +448,79 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 						mode = "raw"
 					}
 				}
-				details[currentProfile] = &ProfileDetails{
+				d := &ProfileDetails{
 					Mode:      mode,
 					SocksPort: socksPort,
 					PID:       autoswitchPid,
 				}
+				// Autoswitch does not have its own split-cfg; it lives on the
+				// *current* profile (e.g. qwdtt-tp-s.bl). Mirror the per-profile
+				// loop so `qwdtt debug` / `qwdtt bl -c` reflect a hot-reloaded
+				// bl-file (qwdtt bl load).
+				if bl, blFile, routes := readSplitCfgFull(currentProfile); bl != "" || blFile != "" || len(routes) > 0 {
+					d.BlackList = bl
+					d.BlackListFile = blFile
+					d.SplitRoutes = routes
+				}
+				details[currentProfile] = d
 			}
 		}
 	}
 
 	return details
+}
+
+// getCurrentBlFile returns the bl-file path from the currently active profile.
+// Checks autoswitch current profile first, then active profile, then any running profile.
+// getBlFileForProfile returns the bl-file path for the given running profile,
+// reading it from the profile's state file (qwdtt-<profile>.bl). Unlike
+// getCurrentBlFile, it works for any running profile — including socks
+// connections, which don't set the active_profile file.
+func getBlFileForProfile(profile string) string {
+	if profile == "" {
+		return ""
+	}
+	details := getRunningProfileDetails()
+	if d, ok := details[profile]; ok && d.BlackListFile != "" {
+		return d.BlackListFile
+	}
+	// Fallback: read the state file directly (covers profiles whose details
+	// didn't populate BlackListFile, e.g. a plain tun/raw profile).
+	if bl, blFile, _ := readSplitCfgFull(profile); blFile != "" {
+		return blFile
+	} else if bl != "" {
+		// -bl was used without a file; nothing file-based to list.
+		return ""
+	}
+	for _, d := range details {
+		if d.BlackListFile != "" {
+			return d.BlackListFile
+		}
+	}
+	return ""
+}
+
+func getCurrentBlFile() string {
+	details := getRunningProfileDetails()
+
+	var currentProfile string
+	active := getActiveProfile()
+	if active == "autoswitch" {
+		currentProfile = getAutoswitchCurrentProfile()
+	} else {
+		currentProfile = active
+	}
+
+	if currentProfile != "" {
+		if d, ok := details[currentProfile]; ok && d.BlackListFile != "" {
+			return d.BlackListFile
+		}
+	}
+
+	for _, d := range details {
+		if d.BlackListFile != "" {
+			return d.BlackListFile
+		}
+	}
+	return ""
 }

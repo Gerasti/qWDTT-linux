@@ -93,7 +93,7 @@ func testCmd() {
 
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "wdtt://") || strings.HasPrefix(arg, "qwdtt://") {
-			link, err := parseLink(arg)
+			link, err := parseLinkWithHint(arg)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] Неверная ссылка '%s': %v\n", arg, err)
 				os.Exit(1)
@@ -287,6 +287,16 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	cs := newCaptchaSocket(name)
 	_ = cs.Start()
 	defer cs.Stop()
+
+	// tun/raw modes need cap_net_admin before creating a kernel interface.
+	if mode != "socks" && !hasCapNetAdmin() {
+		result.Error = "cap_net_admin required"
+		fmt.Printf("  [✗] VKAuth (требуется cap_net_admin: sudo setcap cap_net_admin+eip qwdtt; --mode socks не требует root)\n")
+		fmt.Printf("  [✗] Connect\n")
+		fmt.Printf("  [✗] InternetCheck (n/a)\n")
+		fmt.Printf("  → FAIL\n\n")
+		return result
+	}
 
 	c, err := core.New(cfg)
 	if err != nil {
