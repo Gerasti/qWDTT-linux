@@ -254,8 +254,13 @@ func connectCmd() {
 			if !killByPidFile("autoswitch") {
 				killByPgrep("autoswitch")
 			}
-			if activeProfile := getActiveProfile(); activeProfile == "autoswitch" {
-				clearAutoswitchCurrentProfile()
+			// The autoswitch daemon is always tracked as the "autoswitch" pseudo
+			// profile (or via its current sub-profile state file), so clear its
+			// state regardless of whether active_profile was wiped by a prior
+			// profile rotation. Relying on active_profile here is unreliable in
+			// socks auto-switch mode, where active_profile is frequently stale.
+			clearAutoswitchCurrentProfile()
+			if getActiveProfile() == "autoswitch" {
 				clearActiveProfile()
 			}
 			if isKernelInterfaceActive() {
@@ -332,13 +337,17 @@ func connectCmd() {
 		}
 		if *mode == "tun" {
 			// Kernel mode: only one connection allowed (wg-qwdtt interface).
-			// Block if autoswitch daemon is running (it uses tun mode),
-			// or if the tun interface is already active.
+			// Block if autoswitch daemon is running in tun/raw mode (conflicts
+			// on wg-qwdtt/raw-qwdtt interfaces). Socks-mode autoswitch does
+			// NOT conflict — it uses wireproxy, not the kernel interface.
 			if isDaemonRunning("autoswitch") {
-				msg := "Уже запущено авто-переключение в режиме tun. Используйте qwdtt discon для остановки."
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
-				notifyError(profileName, msg)
-				os.Exit(1)
+				autoswitchMode := getAutoswitchMode()
+				if autoswitchMode == "tun" || autoswitchMode == "raw" {
+					msg := fmt.Sprintf("Уже запущено авто-переключение в режиме %s. Используйте qwdtt discon для остановки.", autoswitchMode)
+					fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+					notifyError(profileName, msg)
+					os.Exit(1)
+				}
 			}
 			if isKernelInterfaceActive() {
 				activeProfile := getActiveProfile()
@@ -507,6 +516,17 @@ func connectCmd() {
 	var profiles []string
 	if *autoSwitch {
 		profiles = listProfileNames()
+		// In socks mode, silently exclude profiles that are already running
+		// as separate daemons (e.g. in tun/raw mode) to avoid conflicts.
+		if *mode == "socks" {
+			filtered := profiles[:0]
+			for _, p := range profiles {
+				if !isDaemonRunning(p) {
+					filtered = append(filtered, p)
+				}
+			}
+			profiles = filtered
+		}
 		if len(profiles) == 0 {
 			log.Fatal("Нет доступных профилей")
 		}
@@ -856,7 +876,7 @@ func tryConnectProfile(
 					}
 
 					if splitCfg != nil {
-						applyRawSplitTunnel(splitCfg)
+						addKernelBypassRoutes(splitCfg.domains) // routes tracked in splitRoutes internally
 					}
 
 					fmt.Println("[*] Проверка работоспособности туннеля...")
@@ -921,7 +941,17 @@ func tryConnectProfile(
 								len(splitCfg.domains), len(bypassIPs))
 						}
 						if splitCfg != nil {
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
+							// When a kernel WireGuard interface (wg-qwdtt) is active
+							// (e.g. a tun profile is running alongside this socks
+							// process), install kernel-level bypass routes so
+							// wireproxy's directDialer connections bypass the tunnel
+							// instead of being captured by wg-qwdtt's 0.0.0.0/1,
+							// 128.0.0.0/1 routes.
+							var kernelRoutes []string
+							if isKernelInterfaceActive() {
+								kernelRoutes = addKernelBypassRoutes(splitCfg.domains)
+							}
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, kernelRoutes)
 						}
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {

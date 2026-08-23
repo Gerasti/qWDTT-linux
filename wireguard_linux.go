@@ -323,18 +323,9 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		return fmt.Errorf("no Address found in config")
 	}
 
-	var splitIPs []string
-	if splitCfg != nil && len(splitCfg.domains) > 0 {
-		ips, err := resolveDomainIPs(splitCfg.domains)
-		if err != nil {
-			fmt.Printf("[WARNING] Не удалось резолвить домены для split tunneling: %v\n", err)
-		} else {
-			splitIPs = ips
-		}
-	}
-
-	if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitIPs) > 0 {
-		fmt.Printf("[*] Split tunnel (blacklist): %d IP напрямую\n", len(splitIPs))
+	var splitCfgDomains []string
+	if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitCfg.domains) > 0 {
+		splitCfgDomains = splitCfg.domains
 	}
 
 	// If the interface already exists, tear it down first.
@@ -396,18 +387,7 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 		applyTurnIPsBypass(turnIPs, gateway)
 
 		// Blacklist: более специфичные маршруты через прямой шлюз (обход туннеля)
-		if splitCfg != nil && splitCfg.mode == "blacklist" && len(splitIPs) > 0 {
-			splitRoutesMu.Lock()
-			for _, ip := range splitIPs {
-				cidr := toCIDRRoute(ip)
-				if e := routeViaGateway(cidr, gateway); e != nil {
-					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
-					continue
-				}
-				splitRoutes = append(splitRoutes, cidr)
-			}
-			splitRoutesMu.Unlock()
-		}
+		addKernelBypassRoutes(splitCfgDomains) // routes tracked in splitRoutes
 	}
 
 	// Полный туннель
@@ -507,38 +487,30 @@ func reloadSplitRoutes(mode, blRaw, daemonProfile, newFile string) (string, erro
 		if wr == nil {
 			return "", fmt.Errorf("no active SOCKS5 runner for profile %q", profile)
 		}
-		wr.SetBypass(domains, nil)
-		_ = writeSplitCfg(profile, blRaw, newFile, nil)
+		// Resolve domains for both wireproxy IP-exact-match AND potential
+		// kernel-level bypass routes (when wg-qwdtt is also active).
+		bypassIPs, _ := resolveDomainIPs(domains) // per-domain resolution errors are non-fatal
+		wr.SetBypass(domains, bypassIPs)
+
+		// When the kernel WireGuard interface (wg-qwdtt) is active — e.g. a tun
+		// profile is running alongside this socks process — the kernel routing
+		// table captures ALL IPv4 traffic (0.0.0.0/1, 128.0.0.0/1 via wg-qwdtt).
+		// The application-level bypass above only prevents wireproxy from sending
+		// traffic through ITS tun; the directDialer connections still follow the
+		// kernel routing table and would be captured by wg-qwdtt. We therefore
+		// also install kernel-level bypass routes via the default gateway.
+		var kernelRoutes []string
+		if isKernelInterfaceActive() {
+			clearKernelBypassRoutes()
+			kernelRoutes = addKernelBypassRoutes(domains)
+		}
+		_ = writeSplitCfg(profile, blRaw, newFile, kernelRoutes)
 		return fmt.Sprintf("socks: bypass list updated (%d domains)", len(domains)), nil
 
 	case "tun", "raw":
-		var ips []string
-		if len(domains) > 0 {
-			ips, _ = resolveDomainIPs(domains) // per-domain resolution errors are non-fatal
-		}
-		gateway := defaultGateway()
-
-		splitRoutesMu.Lock()
-		for _, cidr := range splitRoutes {
-			_ = netlink.RouteDel(&netlink.Route{Dst: cidrNet(cidr)})
-		}
-		splitRoutes = nil
-		var routes []string
-		if gateway != nil {
-			for _, ip := range ips {
-				cidr := toCIDRRoute(ip)
-				if e := routeViaGateway(cidr, gateway); e != nil {
-					fmt.Printf("Warning: не удалось добавить bypass-маршрут %s: %v\n", cidr, e)
-					continue
-				}
-				routes = append(routes, cidr)
-				splitRoutes = append(splitRoutes, cidr)
-			}
-		} else {
-			fmt.Println("[WARNING] default gateway not found, bypass routes not applied")
-		}
-		splitRoutesMu.Unlock()
-
+		// Clear previously tracked routes, then add fresh ones via the shared helper.
+		clearKernelBypassRoutes()
+		routes := addKernelBypassRoutes(domains)
 		_ = writeSplitCfg(profile, blRaw, newFile, routes)
 		return fmt.Sprintf("%s: bypass routes updated (%d domains, %d routes)", mode, len(domains), len(routes)), nil
 
@@ -583,22 +555,37 @@ func defaultGateway() net.IP {
 	return nil
 }
 
-func applyRawSplitTunnel(splitCfg *splitTunnelConfig) {
-	if splitCfg == nil || splitCfg.mode != "blacklist" || len(splitCfg.domains) == 0 {
-		return
+// addKernelBypassRoutes resolves the given domains to IPs and adds kernel-level
+// bypass routes (via the default gateway) so that traffic to those addresses
+// bypasses any active WireGuard tunnel (wg-qwdtt). Used by tun, raw, and socks
+// modes whenever a kernel WireGuard interface may also be present.
+// Returns the list of successfully added route CIDRs.
+func addKernelBypassRoutes(domains []string) []string {
+	if len(domains) == 0 {
+		return nil
 	}
+
+	ips, err := resolveDomainIPs(domains)
+	if err != nil {
+		fmt.Printf("[WARNING] Не удалось резолвить домены для обхода: %v\n", err)
+		return nil
+	}
+	if len(ips) == 0 {
+		return nil
+	}
+
 	gateway := defaultGateway()
 	if gateway == nil {
-		fmt.Printf("[WARNING] Не найден default gateway, split tunneling невозможен\n")
-		return
+		fmt.Println("[WARNING] default gateway не найден, kernel-обход невозможен")
+		return nil
 	}
-	ips, err := resolveDomainIPs(splitCfg.domains)
-	if err != nil {
-		fmt.Printf("[WARNING] Не удалось резолвить домены для split tunneling: %v\n", err)
-		return
-	}
+
 	fmt.Printf("[*] Split tunnel (blacklist): %d IP напрямую\n", len(ips))
+
 	splitRoutesMu.Lock()
+	defer splitRoutesMu.Unlock()
+
+	var routes []string
 	for _, ip := range ips {
 		cidr := toCIDRRoute(ip)
 		if e := routeViaGateway(cidr, gateway); e != nil {
@@ -606,8 +593,14 @@ func applyRawSplitTunnel(splitCfg *splitTunnelConfig) {
 			continue
 		}
 		splitRoutes = append(splitRoutes, cidr)
+		routes = append(routes, cidr)
 	}
-	splitRoutesMu.Unlock()
+	return routes
+}
+
+// clearKernelBypassRoutes removes all kernel bypass routes tracked in splitRoutes.
+func clearKernelBypassRoutes() {
+	clearSplitRoutes()
 }
 
 // testRawConnectivity пингует внешние хосты через raw TUN интерфейс.

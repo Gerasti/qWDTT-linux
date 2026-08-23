@@ -1155,7 +1155,10 @@ func listProfileNames() []string {
 	readFromDir(filepath.Join(configDir(), "ro-profiles"))
 
 	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].priority > profiles[j].priority
+		if profiles[i].priority != profiles[j].priority {
+			return profiles[i].priority > profiles[j].priority
+		}
+		return profiles[i].name < profiles[j].name
 	})
 
 	var names []string
@@ -1842,12 +1845,12 @@ func printBlackList(d *ProfileDetails) {
 }
 
 func debugCmd() {
-	activeProfile := getActiveProfile()
-
 	fmt.Printf("=== DEBUG INFO ===\n\n")
 
-	// Show autoswitch status if active
-	if activeProfile == "autoswitch" {
+	// Show autoswitch status if active. Detect via the live autoswitch PID file
+	// rather than active_profile, which is unreliable in auto-switch/socks mode
+	// (it can be stale or cleared on profile rotation).
+	if isDaemonRunning("autoswitch") {
 		fmt.Println("[*] Режим авто-переключения активен")
 	}
 
@@ -2570,7 +2573,8 @@ func blCmd() {
 		fmt.Fprintln(os.Stderr, "Usage: qwdtt bl <add|list|remove|find|init|load> [options] [paths/domains...]")
 		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd), init, load <path>")
 		fmt.Fprintln(os.Stderr, "  -f, --file PATH   Path to bypass routes JSON file (required, except for init/load)")
-		fmt.Fprintln(os.Stderr, "  -c, --current     Use current running profile's bl-file")
+		fmt.Fprintln(os.Stderr, "  -p, --profile PROFILE  Target a specific running profile's bl-file")
+		fmt.Fprintln(os.Stderr, "  -r, --reload          Hot-reload bl-file to the running daemon after changes (tun/raw/socks)")
 	}
 	if len(os.Args) < 3 {
 		printBlUsage()
@@ -2580,11 +2584,11 @@ func blCmd() {
 	var file string
 	fs.StringVar(&file, "file", "", "Path to bypass routes JSON file (required)")
 	fs.StringVar(&file, "f", "", "Alias for -file")
-	current := fs.Bool("current", false, "Use the current running profile's bl-file")
-	fs.BoolVar(current, "c", false, "Alias for --current")
 	yes := fs.Bool("y", false, "Skip confirmation prompt (remove only)")
-	profile := fs.String("profile", "", "Target a specific running profile's bl-file (overrides -c/--current, works for socks)")
+	profile := fs.String("profile", "", "Target a specific running profile's bl-file (works for socks)")
 	fs.StringVar(profile, "p", "", "Alias for -profile")
+	reload := fs.Bool("reload", false, "Hot-reload bl-file to the running daemon after changes (tun/raw/socks)")
+	fs.BoolVar(reload, "r", false, "Alias for --reload")
 	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
@@ -2604,10 +2608,6 @@ func blCmd() {
 		return
 	}
 
-	if *profile != "" && *current {
-		fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -c/--current и -p/--profile одновременно")
-		os.Exit(1)
-	}
 	if *profile != "" {
 		if file != "" {
 			fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -p/--profile и -f/--file одновременно")
@@ -2619,19 +2619,12 @@ func blCmd() {
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "[*] Используется bl-file профиля %q: %s\n", *profile, file)
-	}
-
-	if *current {
-		if file != "" {
-			fmt.Fprintln(os.Stderr, "[ERROR] нельзя использовать -c/--current и -f/--file одновременно")
-			os.Exit(1)
-		}
+	} else if file == "" {
+		// Auto-detect: use the bl-file of the current running profile.
 		file = getCurrentBlFile()
-		if file == "" {
-			fmt.Fprintln(os.Stderr, "[ERROR] не найден текущий bl-file: нет запущенных профилей с -bl-file")
-			os.Exit(1)
+		if file != "" {
+			fmt.Fprintf(os.Stderr, "[*] Используется bl-file текущего профиля TUN/RAW: %s\n", file)
 		}
-		fmt.Fprintf(os.Stderr, "[*] Используется текущий bl-file: %s\n", file)
 	}
 
 	if file == "" {
@@ -2648,16 +2641,16 @@ func blCmd() {
 		blList(file)
 	case "add":
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl add <domain1> [domain2...] -file/-f PATH")
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl add <domain1> [domain2...] -file/-f PATH [-r]")
 			os.Exit(1)
 		}
-		blAdd(args, file)
+		blAdd(args, file, *reload, *profile)
 	case "remove", "rm":
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl remove <domain1> [domain2...] -file/-f PATH [-y]")
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl remove <domain1> [domain2...] -file/-f PATH [-y] [-r]")
 			os.Exit(1)
 		}
-		blRemove(args, file, *yes)
+		blRemove(args, file, *yes, *reload, *profile)
 	case "find", "fd":
 		if len(args) == 0 {
 			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl find <domain1> [domain2...] -file/-f PATH")
@@ -2689,6 +2682,120 @@ func blInitCmd(args []string) {
 	fmt.Printf("[OK] Создан bl-file: %s (0 доменов)\n", path)
 }
 
+// resolveBlSocket determines the daemon's control socket path for the target
+// profile. If explicitProfile is non-empty it is used directly; otherwise the
+// active profile (or the autoswitch sub-profile) is used. The returned mode is
+// always one of tun/raw/socks. An error is returned when no suitable running
+// daemon can be found.
+func resolveBlSocket(explicitProfile string) (sock string, targetProfile, mode string, err error) {
+	autoswitchRunning := isDaemonRunning("autoswitch")
+	autoswitchCurrent := getAutoswitchCurrentProfile()
+	details := getRunningProfileDetails()
+
+	var socketProfile string
+	if explicitProfile != "" {
+		targetProfile = explicitProfile
+		// The autoswitch daemon owns the only control socket that can
+		// hot-reload its current sub-profile. Route reloads for that
+		// profile to the autoswitch socket; any mode (incl. socks) is allowed
+		// because the user explicitly named the target.
+		if autoswitchRunning && autoswitchCurrent == targetProfile {
+			socketProfile = "autoswitch"
+		} else {
+			socketProfile = targetProfile
+		}
+	} else {
+		// bl без аргументов работает ТОЛЬКИ с tun/raw (kernel interface):
+		// несколько socks-профилей могут работать одновременно, так что
+		// active_profile не может их однозначно идентифицировать.
+		// Приоритет выбора tun/raw-цели: autoswitch current (если tun/raw) ->
+		// active_profile (если tun/raw) -> любой запущенный tun/raw профиль.
+		if autoswitchRunning && autoswitchCurrent != "" {
+			if d, ok := details[autoswitchCurrent]; ok && (d.Mode == "tun" || d.Mode == "raw") {
+				socketProfile, targetProfile = "autoswitch", autoswitchCurrent
+			}
+		}
+		if socketProfile == "" {
+			if active := getActiveProfile(); active != "" && active != "autoswitch" {
+				if d, ok := details[active]; ok && (d.Mode == "tun" || d.Mode == "raw") {
+					socketProfile, targetProfile = active, active
+				}
+			}
+		}
+		if socketProfile == "" {
+			for name, d := range details {
+				if name == "autoswitch" {
+					continue
+				}
+				if d.Mode == "tun" || d.Mode == "raw" {
+					socketProfile, targetProfile = name, name
+					break
+				}
+			}
+		}
+		if socketProfile == "" {
+			return "", "", "", fmt.Errorf("нет активного подключения TUN/RAW. Укажите профиль отдельно: -p <profile>")
+		}
+	}
+
+	d, ok := details[targetProfile]
+	if !ok {
+		return "", "", "", fmt.Errorf("не удалось определить параметры запущенного профиля %q", targetProfile)
+	}
+	mode = d.Mode
+	if mode != "tun" && mode != "raw" && mode != "socks" {
+		return "", "", "", fmt.Errorf("bl reload поддерживается для tun/raw/socks, текущий режим: %q", mode)
+	}
+
+	sock = socketPath(socketProfile)
+	if _, statErr := os.Stat(sock); statErr != nil {
+		return "", "", "", fmt.Errorf("сокет демена не найден: %s (демен не запущен?)", sock)
+	}
+	return sock, targetProfile, mode, nil
+}
+
+// reloadBlFile expands/resolves the given file path and sends a BL_RELOAD
+// command to the running daemon so that the bypass routes file is re-read
+// without reconnecting. The explicitProfile (from -p/--profile) is used to
+// locate the daemon's control socket; when empty the active profile is used.
+func reloadBlFile(file string, explicitProfile string) {
+	expanded, err := expandPath(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+	abspath, err := filepath.Abs(expanded)
+	if err != nil {
+		abspath = expanded
+	}
+
+	if explicitProfile == "" && !isKernelInterfaceActive() && !rawIfaceActive() {
+		return
+	}
+
+	sock, targetProfile, mode, err := resolveBlSocket(explicitProfile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[*] Перезагрузка bl-file %q для профиля %q (режим %s)...\n", abspath, targetProfile, mode)
+	reply, err := sendBlReload(sock, abspath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	if strings.HasPrefix(reply, "RELOAD_OK|") {
+		fmt.Printf("[OK] %s\n", strings.TrimPrefix(reply, "RELOAD_OK|"))
+	} else if strings.HasPrefix(reply, "RELOAD_ERR|") {
+		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", strings.TrimPrefix(reply, "RELOAD_ERR|"))
+		os.Exit(1)
+	} else {
+		fmt.Printf("[*] Ответ демона: %s\n", reply)
+	}
+}
+
 // blLoad hot-reloads the bypass routes file of the currently running qwdtt
 // connection (tun, raw or socks) through the daemon's control socket. The new
 // bl-file replaces the one used at connect time; -bl domains are merged in.
@@ -2705,76 +2812,7 @@ func blLoad(args []string, explicitProfile string) {
 		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
 		os.Exit(1)
 	}
-	expanded, err := expandPath(rawPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
-		os.Exit(1)
-	}
-	abspath, err := filepath.Abs(expanded)
-	if err != nil {
-		abspath = expanded
-	}
-
-	// Locate the running daemon and its control socket.
-	active := getActiveProfile()
-	var socketProfile, targetProfile string
-	if explicitProfile != "" {
-		targetProfile = explicitProfile
-		if active == "autoswitch" && targetProfile == getAutoswitchCurrentProfile() {
-			socketProfile = "autoswitch"
-		} else {
-			socketProfile = targetProfile
-		}
-	} else {
-		if active == "" {
-			fmt.Fprintln(os.Stderr, "[ERROR] нет активного подключения TUN/RAW. Укажите профиль отдельно: qwdtt bl load -p <profile> <path>")
-			os.Exit(1)
-		}
-		socketProfile = active
-		targetProfile = active
-		if active == "autoswitch" {
-			socketProfile = "autoswitch"
-			targetProfile = getAutoswitchCurrentProfile()
-			if targetProfile == "" {
-				fmt.Fprintln(os.Stderr, "[ERROR] авто-переключение активно, но нет подключённого профиля для применения bl-file")
-				os.Exit(1)
-			}
-		}
-	}
-
-	details := getRunningProfileDetails()
-	d, ok := details[targetProfile]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "[ERROR] не удалось определить параметры запущенного профиля %q\n", targetProfile)
-		os.Exit(1)
-	}
-	mode := d.Mode
-	if mode != "tun" && mode != "raw" && mode != "socks" {
-		fmt.Fprintf(os.Stderr, "[ERROR] bl load поддерживается для tun/raw/socks, текущий режим: %q\n", mode)
-		os.Exit(1)
-	}
-
-	sock := socketPath(socketProfile)
-	if _, err := os.Stat(sock); err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] сокет демона не найден: %s (демон не запущен?)\n", sock)
-		os.Exit(1)
-	}
-
-	fmt.Printf("[*] Применение bl-file %q к профилю %q (режим %s)...\n", abspath, targetProfile, mode)
-	reply, err := sendBlReload(sock, abspath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
-		os.Exit(1)
-	}
-
-	if strings.HasPrefix(reply, "RELOAD_OK|") {
-		fmt.Printf("[OK] %s\n", strings.TrimPrefix(reply, "RELOAD_OK|"))
-	} else if strings.HasPrefix(reply, "RELOAD_ERR|") {
-		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", strings.TrimPrefix(reply, "RELOAD_ERR|"))
-		os.Exit(1)
-	} else {
-		fmt.Printf("[*] Ответ демона: %s\n", reply)
-	}
+	reloadBlFile(rawPath, explicitProfile)
 }
 
 func blList(file string) {
@@ -2811,7 +2849,7 @@ func validateBlDomains(domains []string) {
 	}
 }
 
-func blAdd(domains []string, file string) {
+func blAdd(domains []string, file string, reload bool, profile string) {
 	validateBlDomains(domains)
 	raw, existing, isArray, err := loadBypassForEdit(file)
 	createNew := false
@@ -2852,13 +2890,16 @@ func blAdd(domains []string, file string) {
 		return
 	}
 
-	if err := saveBypassFile(file, raw, existing, isArray, createNew); err != nil {
-		log.Fatalf("Ошибка сохранения %q: %v", file, err)
-	}
-	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(existing))
-}
+ 	if err := saveBypassFile(file, raw, existing, isArray, createNew); err != nil {
+ 		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+ 	}
+ 	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(existing))
+ 	if reload {
+ 		reloadBlFile(file, profile)
+ 	}
+ }
 
-func blRemove(domains []string, file string, assumeYes bool) {
+func blRemove(domains []string, file string, assumeYes bool, reload bool, profile string) {
 	validateBlDomains(domains)
 	if !assumeYes {
 		fmt.Printf("Точно удалить %d домен(а/ов) из %q? [y/N] ", len(domains), file)
@@ -2914,11 +2955,14 @@ func blRemove(domains []string, file string, assumeYes bool) {
 		fmt.Printf("[-] удалён: %s\n", d)
 	}
 
-	if err := saveBypassFile(file, raw, out, isArray, false); err != nil {
-		log.Fatalf("Ошибка сохранения %q: %v", file, err)
-	}
-	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(out))
-}
+ 	if err := saveBypassFile(file, raw, out, isArray, false); err != nil {
+ 		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+ 	}
+ 	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(out))
+ 	if reload {
+ 		reloadBlFile(file, profile)
+ 	}
+ }
 
 func blFind(queries []string, file string) {
 	validateBlDomains(queries)

@@ -49,14 +49,16 @@ Profile Management:
   import <file>               Import profiles from JSON or ZIP file
                                 -dry-run: show what would be imported without saving
   bl list                   List bypass route domains
-  bl add <d1> [d2...]       Add domains to bypass routes file
-  bl remove <d1> [d2...]    Remove domains from bypass routes file
+  bl add <d1> [d2...]       Add domains to bypass routes file (-r to hot-reload)
+  bl remove <d1> [d2...]    Remove domains from bypass routes file (-r to hot-reload)
   bl find <d1> [d2...]      Check if domains exist in bypass routes file
   bl init [PATH]            Create new bypass routes file (default: qwdtt_bl.json)
   bl load <path>            Hot-reload bl-file for the running tun/raw/socks connection
-                                  (replaces current bl-file, -bl domains merged, NO reconnect)
-                                  -p, --profile PROFILE  target a specific profile explicitly (for socks/autoswitch)
-                                All bl subcommands (except init, load) require -file PATH or -c/--current
+                                (replaces current bl-file, -bl domains merged, NO reconnect)
+  -p, --profile PROFILE     Target a specific running profile's bl-file (for socks/autoswitch)
+  -r, --reload              Hot-reload bl-file to the running daemon after changes (tun/raw/socks)
+  All bl subcommands (except init) require -file PATH, -p/--profile,
+  or no flags (auto-detects current running profile's bl-file)
 
 Subscription:
   subscription <add|remove|show|move|update>  Manage subscriptions (alias: sub)

@@ -470,15 +470,13 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 	return details
 }
 
-// getCurrentBlFile returns the bl-file path from the currently active profile.
-// Checks autoswitch current profile first, then active profile, then any running profile.
 // getBlFileForProfile returns the bl-file path for the given running profile,
-// reading it from the profile's state file (qwdtt-<profile>.bl). Unlike
-// getCurrentBlFile, it works for any running profile — including socks
-// connections, which don't set the active_profile file.
+// reading it from the profile's state file (qwdtt-<profile>.bl). It works
+// for any running profile — including socks connections, which don't set
+// the active_profile file.
 func getBlFileForProfile(profile string) string {
 	if profile == "" {
-		return ""
+		return getCurrentBlFile()
 	}
 	details := getRunningProfileDetails()
 	if d, ok := details[profile]; ok && d.BlackListFile != "" {
@@ -498,28 +496,62 @@ func getBlFileForProfile(profile string) string {
 		}
 	}
 	return ""
+} // getCurrentBlFile returns the bl-file path from the currently active profile.
+// getAutoswitchMode returns the connection mode of the running autoswitch daemon
+// by parsing its process cmdline. Returns "tun", "raw", or "socks".
+// Returns "tun" as default if the PID is alive but cmdline cannot be parsed.
+func getAutoswitchMode() string {
+	pidStr := readPidFile(pidFilePath("autoswitch"))
+	if pidStr == "" {
+		return ""
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
+	if err != nil || !isProcessAlive(pid) {
+		return ""
+	}
+	cmdlinePath := fmt.Sprintf("/proc/%d/cmdline", pid)
+	cmdlineData, err := os.ReadFile(cmdlinePath)
+	if err != nil {
+		return "tun"
+	}
+	cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
+	if strings.Contains(cmdline, "-mode socks") || strings.Contains(cmdline, "--mode=socks") ||
+		strings.Contains(cmdline, "-mode=socks") {
+		return "socks"
+	}
+	if strings.Contains(cmdline, "-mode raw") || strings.Contains(cmdline, "--mode=raw") ||
+		strings.Contains(cmdline, "-mode=raw") {
+		return "raw"
+	}
+	return "tun"
 }
 
+// getCurrentBlFile returns the bl-file path from the currently active tun/raw
+// profile. It mirrors resolveBlSocket's no-`-p` selection so that `qwdtt bl
+// ls`/`bl list` (auto-detect) and `qwdtt bl load <file>` (без -p) согласуются.
+// socks-профили (в т.ч. autoswitch-current в socks) НЕ используются — их можно
+// несколько, и bl без аргументов работает только с tun/raw (kernel interface).
 func getCurrentBlFile() string {
 	details := getRunningProfileDetails()
 
-	var currentProfile string
-	active := getActiveProfile()
-	if active == "autoswitch" {
-		currentProfile = getAutoswitchCurrentProfile()
-	} else {
-		currentProfile = active
+	// Priority: autoswitch current (если tun/raw) -> active_profile (если tun/raw) -> any running tun/raw.
+	if isDaemonRunning("autoswitch") {
+		if cur := getAutoswitchCurrentProfile(); cur != "" {
+			if d, ok := details[cur]; ok && (d.Mode == "tun" || d.Mode == "raw") && d.BlackListFile != "" {
+				return d.BlackListFile
+			}
+		}
 	}
-
-	if currentProfile != "" {
-		if d, ok := details[currentProfile]; ok && d.BlackListFile != "" {
+	if active := getActiveProfile(); active != "" && active != "autoswitch" {
+		if d, ok := details[active]; ok && (d.Mode == "tun" || d.Mode == "raw") && d.BlackListFile != "" {
 			return d.BlackListFile
 		}
 	}
-
 	for _, d := range details {
-		if d.BlackListFile != "" {
-			return d.BlackListFile
+		if d.Mode == "tun" || d.Mode == "raw" {
+			if d.BlackListFile != "" {
+				return d.BlackListFile
+			}
 		}
 	}
 	return ""
