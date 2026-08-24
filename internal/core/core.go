@@ -15,26 +15,27 @@ import (
 )
 
 type Config struct {
-	PeerAddr    string
-	Password    string
-	Hashes      []string
-	Listen      string
-	TurnHost    string
-	TurnPort    string
-	DeviceID    string
-	Workers     int
-	CaptchaMode string
-	MTU         int
-	DNS         string
-	Mode        string
-	SocksPort   int
-	SocksUser   string
-	SocksPass   string
-	WGRawConfig string
-	RawMode     bool
-	NoDTLS      bool
-	Transport   string
-	RawPort     string
+	PeerAddr      string
+	Password      string
+	Hashes        []string
+	Listen        string
+	TurnHost      string
+	TurnPort      string
+	DeviceID      string
+	Workers       int
+	CaptchaMode   string
+	MTU           int
+	DNS           string
+	Mode          string
+	SocksPort     int
+	SocksUser     string
+	SocksPass     string
+	SocksBindAddr string
+	WGRawConfig   string
+	RawMode       bool
+	NoDTLS        bool
+	Transport     string
+	RawPort       string
 }
 
 type EventType string

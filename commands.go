@@ -883,6 +883,9 @@ func showCmd() {
 			fmt.Printf("  Режим: %s\n", d.Mode)
 			if d.Mode == "socks" {
 				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+				if d.SocksPublic {
+					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+				}
 			}
 			fmt.Printf("  PID: %d\n", d.PID)
 		}
@@ -2013,17 +2016,17 @@ func printBlackList(d *ProfileDetails, profile string) {
 	if len(blDomains) > 0 {
 		fmt.Printf("  Black list (%d):\n", len(blDomains))
 		if pending && len(appliedSet) > 0 {
-		// Pending changes are shown as a per-row marker in a separate left
-		// column (variant B2): "[!]" if the row contains a pending add, else
-		// "[-]" for a pending remove, else blank. Applied domains are listed
-		// plainly; only unapplied domains carry the prefix that drives the row.
-		tags := make([]blDomain, len(blDomains))
-		for i, dom := range blDomains {
-			tags[i] = blDomain{Domain: displayDomain(dom)}
-			if _, applied := appliedSet[domainKey(dom)]; !applied {
-				tags[i].Prefix = "[!]"
+			// Pending changes are shown as a per-row marker in a separate left
+			// column (variant B2): "[!]" if the row contains a pending add, else
+			// "[-]" for a pending remove, else blank. Applied domains are listed
+			// plainly; only unapplied domains carry the prefix that drives the row.
+			tags := make([]blDomain, len(blDomains))
+			for i, dom := range blDomains {
+				tags[i] = blDomain{Domain: displayDomain(dom)}
+				if _, applied := appliedSet[domainKey(dom)]; !applied {
+					tags[i].Prefix = "[!]"
+				}
 			}
-		}
 			fmt.Print(formatTaggedDomains(tags, "    ", "  ", 3))
 		} else {
 			displayed := make([]string, len(blDomains))
@@ -2098,6 +2101,9 @@ func debugCmd() {
 				fmt.Printf("  Mode: %s\n", e.d.Mode)
 				if e.d.Mode == "socks" {
 					fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
+					if e.d.SocksPublic {
+						fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+					}
 				}
 				fmt.Printf("  PID: %d\n", e.d.PID)
 
@@ -2139,6 +2145,9 @@ func debugCmd() {
 			fmt.Printf("  Mode: %s\n", e.d.Mode)
 			if e.d.Mode == "socks" {
 				fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
+				if e.d.SocksPublic {
+					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+				}
 			}
 			fmt.Printf("  PID: %d\n", e.d.PID)
 
@@ -3125,12 +3134,12 @@ func blList(file string) {
 }
 
 func validateBlDomains(domains []string) {
- 	for _, d := range domains {
- 		d = strings.TrimSpace(d)
- 		if d == "" {
- 			continue
- 		}
- 		if strings.Contains(d, ",") {
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if strings.Contains(d, ",") {
 			fmt.Fprintf(os.Stderr, "[ERROR] домен не может содержать запятую: %q\n", d)
 			os.Exit(1)
 		}
@@ -3178,14 +3187,14 @@ func blAdd(domains []string, file string, reload bool, profile string) {
 		return
 	}
 
- 	if err := saveBypassFile(file, raw, existing, isArray, createNew); err != nil {
- 		log.Fatalf("Ошибка сохранения %q: %v", file, err)
- 	}
- 	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(existing))
- 	if reload {
- 		reloadBlFile(file, profile)
- 	}
- }
+	if err := saveBypassFile(file, raw, existing, isArray, createNew); err != nil {
+		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+	}
+	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(existing))
+	if reload {
+		reloadBlFile(file, profile)
+	}
+}
 
 func blRemove(domains []string, file string, assumeYes bool, reload bool, profile string) {
 	validateBlDomains(domains)
@@ -3243,14 +3252,14 @@ func blRemove(domains []string, file string, assumeYes bool, reload bool, profil
 		fmt.Printf("[-] удалён: %s\n", d)
 	}
 
- 	if err := saveBypassFile(file, raw, out, isArray, false); err != nil {
- 		log.Fatalf("Ошибка сохранения %q: %v", file, err)
- 	}
- 	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(out))
- 	if reload {
- 		reloadBlFile(file, profile)
- 	}
- }
+	if err := saveBypassFile(file, raw, out, isArray, false); err != nil {
+		log.Fatalf("Ошибка сохранения %q: %v", file, err)
+	}
+	fmt.Printf("\n[OK] Файл обновлён: %q (всего %d доменов)\n", file, len(out))
+	if reload {
+		reloadBlFile(file, profile)
+	}
+}
 
 func blFind(queries []string, file string) {
 	validateBlDomains(queries)

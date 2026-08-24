@@ -23,6 +23,7 @@ type WireproxyRunner struct {
 	socksPort     int
 	socksUser     string
 	socksPass     string
+	socksBindAddr string
 	config        *wireproxy.Configuration
 	socksListener net.Listener
 	bypassDomains []string
@@ -46,11 +47,15 @@ func (w *WireproxyRunner) bypassSnapshot() (domains, ips []string) {
 	return w.bypassDomains, w.bypassIPs
 }
 
-func NewWireproxyRunner(socksPort int, socksUser, socksPass string, bypassDomains, bypassIPs []string) *WireproxyRunner {
+func NewWireproxyRunner(socksPort int, socksUser, socksPass, socksBindAddr string, bypassDomains, bypassIPs []string) *WireproxyRunner {
+	if socksBindAddr == "" {
+		socksBindAddr = "127.0.0.1"
+	}
 	return &WireproxyRunner{
 		socksPort:     socksPort,
 		socksUser:     socksUser,
 		socksPass:     socksPass,
+		socksBindAddr: socksBindAddr,
 		bypassDomains: bypassDomains,
 		bypassIPs:     bypassIPs,
 	}
@@ -109,7 +114,7 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 	// Build wireproxy config that references the WG config
 	var confBuilder strings.Builder
 	confBuilder.WriteString(fmt.Sprintf("WGConfig = %s\n", tmpFile.Name()))
-	confBuilder.WriteString(fmt.Sprintf("[Socks5]\nBindAddress = 127.0.0.1:%d\n", w.socksPort))
+	confBuilder.WriteString(fmt.Sprintf("[Socks5]\nBindAddress = %s:%d\n", w.socksBindAddr, w.socksPort))
 	if w.socksUser != "" {
 		confBuilder.WriteString(fmt.Sprintf("Username = %s\n", w.socksUser))
 		confBuilder.WriteString(fmt.Sprintf("Password = %s\n", w.socksPass))

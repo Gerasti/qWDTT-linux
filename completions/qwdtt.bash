@@ -51,7 +51,7 @@ _qwdtt_completions() {
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
                 COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch -mode -socks-port -socks-user -socks-password -raw-port -transport -toggle -black-list -bl -black-list-file -bl-file" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-workers -mtu -hashes -dns -captcha -timeout -auto-switch -mode -socks-port -socks-user -socks-password -pub --pub -public --public -raw-port -transport -toggle -black-list -bl -black-list-file -bl-file" -- "$cur") )
             elif [[ $prev == "-captcha" ]]; then
                 COMPREPLY=( $(compgen -W "auto rjs" -- "$cur") )
             elif [[ $prev == "-mode" ]]; then
@@ -138,7 +138,7 @@ _qwdtt_completions() {
                 local all_profiles=$(qwdtt __complete_all 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$all_profiles" -- "$cur") )
             elif [[ $cur == -* ]]; then
-                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group --group -sub -timeout -mode -socks-port -socks-user -socks-password" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-ro -en -enabled -dis -disabled -group --group -sub -timeout -mode -socks-port -socks-user -socks-password -pub --pub -public --public" -- "$cur") )
              elif [[ $prev == "-mode" ]]; then
                 COMPREPLY=( $(compgen -W "tun socks raw" -- "$cur") )
             fi

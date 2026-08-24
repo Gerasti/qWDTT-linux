@@ -48,6 +48,8 @@ func testCmd() {
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
+	pubFlag := fs.Bool("pub", false, "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)")
+	fs.BoolVar(pubFlag, "public", false, "Alias for --pub")
 	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default: udp)")
 	group := fs.String("group", "", "Test all profiles in this group")
 	sub := fs.Bool("sub", false, "Test all profiles managed by any subscription")
@@ -188,7 +190,7 @@ func testCmd() {
 	})
 
 	for i, label := range linkLabels {
-		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *transport, label)
+		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *transport, label)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -201,7 +203,7 @@ func testCmd() {
 	}
 
 	for idx, name := range targetProfiles {
-		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *transport)
+		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *transport)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -216,7 +218,7 @@ func testCmd() {
 	fmt.Printf("=== Summary: %d passed, %d failed ===\n", passCount, failCount)
 }
 
-func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, transport string) TestResult {
+func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, transport string) TestResult {
 	// Suppress internal log output — only show test stage results
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
@@ -255,7 +257,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 		deviceID = getOrCreateDeviceID()
 	}
 
- 	cfg := core.Config{
+	cfg := core.Config{
 		PeerAddr:    prof.PeerAddr,
 		Password:    prof.Password,
 		Hashes:      prof.Hashes,
@@ -280,6 +282,11 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
+		if pubFlag {
+			cfg.SocksBindAddr = "0.0.0.0"
+		} else {
+			cfg.SocksBindAddr = "127.0.0.1"
+		}
 	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
@@ -359,7 +366,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, nil, nil)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, cfg.SocksBindAddr, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()
@@ -467,7 +474,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 // testInternetCheck pings 8.8.8.8 and 1.1.1.1 through the tunnel/proxy.
 // In tun mode, pings directly through the wg-qwdtt interface.
 // In socks mode, uses curl via the SOCKS5 proxy.
-func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, transport string, linkStr string) TestResult {
+func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, transport string, linkStr string) TestResult {
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLogOutput)
@@ -505,6 +512,11 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 	}
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
+		if pubFlag {
+			cfg.SocksBindAddr = "0.0.0.0"
+		} else {
+			cfg.SocksBindAddr = "127.0.0.1"
+		}
 	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
@@ -567,7 +579,7 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 					wgApplied = true
 					connectErr := error(nil)
 					if cfg.Mode == "socks" {
-						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, nil, nil)
+						wr = core.NewWireproxyRunner(cfg.SocksPort, cfg.SocksUser, cfg.SocksPass, cfg.SocksBindAddr, nil, nil)
 						connectErr = wr.Start(context.Background(), ev.Data)
 					} else {
 						turnIPs := c.GetTurnIPs()

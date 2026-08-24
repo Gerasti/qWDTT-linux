@@ -128,6 +128,7 @@ Connect Flags:
                                    Required with -mode socks
   -socks-user USER            SOCKS5 username (only with -mode socks)
   -socks-password PASS        SOCKS5 password (only with -mode socks)
+  -pub, --public              Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)
   -raw-port PORT              Raw mode server port (default: 56003)
                                  Only with -mode raw
   -transport TRANSPORT        Transport to TURN relay: udp or tcp (default: udp)

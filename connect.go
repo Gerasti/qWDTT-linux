@@ -160,6 +160,8 @@ func connectCmd() {
 	fs.StringVar(blackListFile, "bl-file", "", "Alias for --black-list-file")
 	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
+	socksBindAddr := fs.Bool("pub", false, "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)")
+	fs.BoolVar(socksBindAddr, "public", false, "Alias for --pub")
 
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		flagArgs, blPositional := splitFlagsAndArgs(fs, os.Args[2:])
@@ -592,7 +594,7 @@ func connectCmd() {
 				success, wasResume, fatalErr := tryConnectProfile(
 					currentProfile,
 					*workers, *mtu, *hashes, *dns, *captcha, *timeout,
-					*autoSwitch, *mode, *socksPort, *socksUser, *socksPass, *rawPort, *transport,
+					*autoSwitch, *mode, *socksPort, *socksUser, *socksPass, *socksBindAddr, *rawPort, *transport,
 					sigCh, stopCh, cs.SolveChan(), sw.get(),
 					splitCfg,
 					false,        // shouldSetActive: handled in connectCmd for non-autoswitch
@@ -650,6 +652,7 @@ func tryConnectProfile(
 	mode string,
 	socksPort int,
 	socksUser, socksPass string,
+	pubFlag bool,
 	rawPort int,
 	transport string,
 	sigCh chan os.Signal,
@@ -713,6 +716,11 @@ func tryConnectProfile(
 
 	if mode == "socks" {
 		cfg.Listen = "127.0.0.1:0"
+		if pubFlag {
+			cfg.SocksBindAddr = "0.0.0.0"
+		} else {
+			cfg.SocksBindAddr = "127.0.0.1"
+		}
 	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
@@ -924,7 +932,7 @@ func tryConnectProfile(
 							bypassDomains = splitCfg.domains
 							bypassIPs, _ = resolveDomainIPs(splitCfg.domains)
 						}
-						wr = core.NewWireproxyRunner(socksPort, socksUser, socksPass, bypassDomains, bypassIPs)
+						wr = core.NewWireproxyRunner(socksPort, socksUser, socksPass, cfg.SocksBindAddr, bypassDomains, bypassIPs)
 						if err := wr.Start(context.Background(), ev.Data); err != nil {
 							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
 							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)

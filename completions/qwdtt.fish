@@ -120,6 +120,7 @@ complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l mode -d "Connectio
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l socks-port -d "SOCKS5 port (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l socks-user -d "SOCKS5 username (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l socks-password -d "SOCKS5 password (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l pub -l public -d "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l raw-port -d "Raw mode server port (only with -mode raw)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l transport -d "Transport to TURN relay" -a "udp tcp"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -l toggle -d "Stop running profile, or start if not running"
@@ -211,6 +212,7 @@ complete -c qwdtt -n "__qwdtt_seen_command test" -f -s mode -l mode -d "Connecti
 complete -c qwdtt -n "__qwdtt_seen_command test" -f -s socks-port -l socks-port -d "SOCKS5 port"
 complete -c qwdtt -n "__qwdtt_seen_command test" -f -s socks-user -l socks-user -d "SOCKS5 username (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command test" -f -s socks-password -l socks-password -d "SOCKS5 password (only with -mode socks)"
+complete -c qwdtt -n "__qwdtt_seen_command test" -f -s pub -l pub -l public -d "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command test" -f -s transport -l transport -d "Transport to TURN relay" -a "udp tcp"
 complete -c qwdtt -n "__qwdtt_seen_command test" -f -s delay -l delay -d "Pause between profiles in seconds"
 

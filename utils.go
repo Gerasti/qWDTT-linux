@@ -257,16 +257,17 @@ func getProcessUsage() (*ProcessUsage, error) {
 
 // ProfileDetails holds information about a running qwdtt profile process.
 type ProfileDetails struct {
-	Mode            string   // "tun" or "socks"
-	SocksPort       int      // SOCKS5 port (only relevant for socks mode)
-	SocksUser       string   // SOCKS5 username (if specified via -socks-user)
-	SocksPass       string   // SOCKS5 password (if specified via -socks-password)
-	PID             int      // Process PID
-	BlackList       string   // raw -bl / --black-list value (space-separated domains)
-	BlackListFile   string   // path to -bl-file / --black-list-file JSON file
-	BlackListMtime  int64    // mtime (UnixNano) of bl-file at last apply; >0 if file-based
+	Mode             string   // "tun" or "socks"
+	SocksPort        int      // SOCKS5 port (only relevant for socks mode)
+	SocksUser        string   // SOCKS5 username (if specified via -socks-user)
+	SocksPass        string   // SOCKS5 password (if specified via -socks-password)
+	SocksPublic      bool     // SOCKS5 listening on 0.0.0.0 (via -pub/--public)
+	PID              int      // Process PID
+	BlackList        string   // raw -bl / --black-list value (space-separated domains)
+	BlackListFile    string   // path to -bl-file / --black-list-file JSON file
+	BlackListMtime   int64    // mtime (UnixNano) of bl-file at last apply; >0 if file-based
 	BlackListDomains []string // domains applied from -bl + bl-file at last apply
-	SplitRoutes     []string // resolved bypass route CIDRs (from state file)
+	SplitRoutes      []string // resolved bypass route CIDRs (from state file)
 }
 
 // getRunningProfileDetails returns details (mode, socks port, PID) for each running profile.
@@ -332,6 +333,13 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 					if err == nil {
 						d.SocksPort = port
 					}
+					break
+				}
+			}
+			// Check for --pub / --public flag
+			for _, field := range fields {
+				if field == "-pub" || field == "--pub" || field == "-public" || field == "--public" {
+					d.SocksPublic = true
 					break
 				}
 			}
@@ -417,6 +425,7 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 				cmdlineData, err := os.ReadFile(cmdlinePath)
 				mode := "tun"
 				socksPort := 0
+				socksPublic := false
 				if err == nil {
 					cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
 					if strings.Contains(cmdline, "-mode socks") || strings.Contains(cmdline, "--mode=socks") ||
@@ -447,27 +456,35 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 								break
 							}
 						}
+						// Check for --pub / --public flag
+						for _, field := range fields {
+							if field == "-pub" || field == "--pub" || field == "-public" || field == "--public" {
+								socksPublic = true
+								break
+							}
+						}
 					} else if strings.Contains(cmdline, "-mode raw") || strings.Contains(cmdline, "--mode=raw") ||
 						strings.Contains(cmdline, "-mode=raw") {
 						mode = "raw"
 					}
 				}
 				d := &ProfileDetails{
-					Mode:      mode,
-					SocksPort: socksPort,
-					PID:       autoswitchPid,
+					Mode:        mode,
+					SocksPort:   socksPort,
+					SocksPublic: socksPublic,
+					PID:         autoswitchPid,
 				}
 				// Autoswitch does not have its own split-cfg; it lives on the
 				// *current* profile (e.g. qwdtt-tp-s.bl). Mirror the per-profile
 				// loop so `qwdtt debug` / `qwdtt bl -c` reflect a hot-reloaded
 				// bl-file (qwdtt bl load).
-			if bl, blFile, routes, mtime, domains := readSplitCfgFull(currentProfile); bl != "" || blFile != "" || len(routes) > 0 {
-				d.BlackList = bl
-				d.BlackListFile = blFile
-				d.BlackListMtime = mtime
-				d.BlackListDomains = domains
-				d.SplitRoutes = routes
-			}
+				if bl, blFile, routes, mtime, domains := readSplitCfgFull(currentProfile); bl != "" || blFile != "" || len(routes) > 0 {
+					d.BlackList = bl
+					d.BlackListFile = blFile
+					d.BlackListMtime = mtime
+					d.BlackListDomains = domains
+					d.SplitRoutes = routes
+				}
 				details[currentProfile] = d
 			}
 		}
