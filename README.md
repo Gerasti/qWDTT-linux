@@ -1,4 +1,4 @@
-# qWDTT linux v1.0.0
+# qWDTT linux v1.1.0
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard или Raw.
 
@@ -108,7 +108,7 @@ sudo dnf install iputils curl patchelf
 
 ```bash
 # Скачать бинарник из Release
-curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.0.0/qwdtt
+curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt
 
 # Указать правильный интерпретатор (glibc) и сделать исполняемым
 patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 qwdtt
@@ -200,6 +200,10 @@ qwdtt log autoswitch -f
 # Live лог при подключении
 qwdtt con -auto-switch -log
 
+# SOCKS5 режим с доступом извне (0.0.0.0 вместо 127.0.0.1)
+qwdtt con --mode socks --pub
+qwdtt con --mode socks --public --socks-port 9051
+
 # Отключить текущий профиль autoswitch (переключится на следующий)
 qwdtt discon <current-profile-name>
 
@@ -262,15 +266,18 @@ qwdtt rm 'wdtt_*' -y                 - То же без подтверждени
 qwdtt test 'wdtt_*'                  - Протестировать все профили по маске
 # ВАЖНО: в fish и bash маску нужно заключать в кавычки, иначе её раскроет сам шелл
 qwdtt import <file.json|file.zip> [--dry-run] - Импортировать профили из JSON или ZIP (--dry-run: просмотр без сохранения)
-qwdtt bl <add|list|remove|find|init|load> [-file PATH] - Управление списком обхода туннеля (bypass routes) в JSON-файле
-  bl list (ls)             - Показать все домены из файла
-  bl add <d1> [d2...]      - Добавить домена/IP в файл
-  bl remove (rm) <d1> [d2...] [-y] - Удалить домена из файла
+qwdtt bl <add|list|remove|find|init|load|unload> [-file PATH] [-p PROFILE] [-r] - Управление списком обхода туннеля (bypass routes) в JSON-файле
+  bl list (ls)             - Показать все домена из файла (отметки [!] и [-] для неприменённых/удалённых)
+  bl add <d1> [d2...] [-r] - Добавить домена/IP в файл (-r: hot-reload без переподключения)
+  bl remove (rm) <d1> [d2...] [-y] [-r] - Удалить домена из файла (-y: без подтверждения, -r: hot-reload)
   bl find (fd) <d1> [d2...] - Проверить, есть ли домена в файле
   bl init [PATH]           - Создать новый bl-file (по умолчанию: qwdtt_bl.json в текущей директории)
   bl load <path>           - Подменить/включить bl-file для уже запущенного tun/raw/socks соединения БЕЗ переподключения
                              (домены сливаются с -bl; -file/-f PATH обязательны для add/remove/find/list/init)
-                             Флаг -c/--current использует bl-file текущего запущенного профиля вместо -file
+  bl unload [-p PROFILE]   - Hot-reload: использовать только inline -bl домены, отбросить bl-file
+                             (без переподключения; без флагов — автоопределение TUN/RAW профиля; -p для socks)
+  Без -file/-p/--profile: bl add/remove/list/find/load/unload автоопределяют
+  bl-file текущего запущенного профиля (TUN/RAW); для socks указывайте -p/--profile
 qwdtt subscription <add|remove|show|move|update> [флаги] - Управление подписками (alias: sub)
   add <url>                    - Добавить подписку (имя берётся из JSON subscriptionName)
   add <name> <url>             - Добавить подписку с явным именем
@@ -322,6 +329,7 @@ mv     - move
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, требуется с `-mode socks`)
 - `-socks-user USER` - логин SOCKS5 (только с `-mode socks`)
 - `-socks-password PASS` - пароль SOCKS5 (только с `-mode socks`)
+- `-pub` / `--public` - слушать на 0.0.0.0 вместо 127.0.0.1 (только с `-mode socks`)
 - `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
 - `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp). Использовать `tcp`, если UDP до TURN-relay блокируется
 - `-log` - выводить лог демона в терминал в реальном времени
@@ -339,14 +347,18 @@ mv     - move
 Управляет списком обхода туннеля (поле `bypassRoutes`) в JSON-файле — тем же, что используется с флагом `-bl-file`. Работает как с обычным JSON-файлом, так и с ZIP (редактирование только файла, ZIP только для чтения).
 
 ```bash
-# Показать все домены из файла
+# Показать все домены из файла (отметки [!] и [-] для неприменённых/удалённых)
 qwdtt bl list -file ./qwdtt_bypass_sites.json      # alias: ls
 
 # Добавить домены/IP (при необходимости файл создастся)
 qwdtt bl add vk.ru yandex.ru -file ./qwdtt_bypass_sites.json
+# -r: применить изменения на лету без переподключения
+qwdtt bl add vk.ru yandex.ru -file ./qwdtt_bypass_sites.json -r
 
 # Удалить домены (запрашивает подтверждение, -y — без него)
 qwdtt bl rm vk.ru -file ./qwdtt_bypass_sites.json
+# -r: применить удаление на лету
+qwdtt bl rm vk.ru -file ./qwdtt_bypass_sites.json -r -y
 
 # Проверить, есть ли домены в файле
 qwdtt bl find yandex.ru -file ./qwdtt_bypass_sites.json   # alias: fd
@@ -354,12 +366,20 @@ qwdtt bl find yandex.ru -file ./qwdtt_bypass_sites.json   # alias: fd
 # Подменить bl-file у уже запущенного соединения (tun/raw/socks) без переподключения
 qwdtt con myserver -bl-file ./qwdtt_bypass_sites.json
 qwdtt bl load ./qwdtt_bypass_sites_2.json              # заменить bl-file на лету
-qwdtt debug                                           # увидеть новые split_routes
+qwdtt debug                                           # увидеть новые splitroutes
+
+# Отключить bl-file для запущенного соединения: использовать только inline -bl домены
+qwdtt bl unload                                       # автоопределение TUN/RAW
+qwdtt bl unload -p socks-profile                      # для socks профиля
 ```
 
-- Флаг `-file PATH` (или `-f`) обязателен. Поддерживаются `~` и переменные окружения (`$ENV`) в пути.
+- `-file PATH` (или `-f`) обязателен для add/remove/find/list/init. Поддерживаются `~` и переменные окружения (`$ENV`) в пути.
+- `-p PROFILE` (или `-p`) для целевого socks-профиля; без него bl-file автоопределяется для TUN/RAW.
+- `-r` / `--reload` — применить изменения на лету (hot-reload) без переподключения.
+- `-y` — пропустить подтверждение при удалении.
 - Формат поля `bypassRoutes` (массив или строка с переносами) сохраняется при редактировании; для нового файла создаётся заголовок `qwdtt-bypass`.
 - IDN-домены (втб.рф) хранятся в punycode (xn--), а при выводе (`list`) показываются в Unicode.
+- `list` помечает неприменённые домены `[!]` и удалённые без `-r` — `[-]`.
 </details>
 
 ## Флаги list

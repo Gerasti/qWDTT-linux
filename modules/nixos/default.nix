@@ -12,7 +12,7 @@ let
 
   qwdtt-package = pkgs.buildGoModule {
     pname = "qwdtt";
-    version = "1.0.0";
+    version = "1.1.0";
 
     src = ./../..;
     vendorHash = null;

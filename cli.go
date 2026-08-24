@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 func printUsage() {
 	fmt.Printf(`qWDTT-linux v%s - VPN client via VK TURN servers
@@ -55,7 +55,10 @@ Profile Management:
   bl find <d1> [d2...]      Check if domains exist in bypass routes file
   bl init [PATH]            Create new bypass routes file (default: qwdtt_bl.json)
   bl load <path>            Hot-reload bl-file for the running tun/raw/socks connection
-                                (replaces current bl-file, -bl domains merged, NO reconnect)
+                            (replaces current bl-file, -bl domains merged, NO reconnect)
+  bl unload [-p|--profile PROFILE]  Hot-reload keeping only inline -bl domains, discarding bl-file
+                            (drops file-based domains, keeps -bl set at connect; NO reconnect;
+                             auto-detects TUN/RAW profile; -p for socks profiles)
   -p, --profile PROFILE     Target a specific running profile's bl-file (for socks/autoswitch)
   -r, --reload              Hot-reload bl-file to the running daemon after changes (tun/raw/socks)
   All bl subcommands (except init) require -file PATH, -p/--profile,
