@@ -89,19 +89,24 @@ sudo nixos-rebuild switch
 ### Debian/Ubuntu
 
 ```bash
-sudo apt install iputils-ping curl patchelf
+sudo apt install iputils-ping curl
 ```
 
 ### Arch Linux
 
 ```bash
-sudo pacman -S iputils curl patchelf
+sudo pacman -S iputils curl
 ```
 
 ### Fedora
 
 ```bash
-sudo dnf install iputils curl patchelf
+sudo dnf install iputils curl
+```
+
+#### До v1.0.0 также
+```
+patchelf
 ```
 
 ### Скачивание и установка бинарника из Release
@@ -110,8 +115,10 @@ sudo dnf install iputils curl patchelf
 # Скачать бинарник из Release
 curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt
 
-# Указать правильный интерпретатор (glibc) и сделать исполняемым
+# Указать правильный интерпретатор (glibc) (до v1.0.0) 
 patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 qwdtt
+
+# Сделать исполняемым
 chmod +x qwdtt
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
