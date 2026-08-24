@@ -504,14 +504,14 @@ func reloadSplitRoutes(mode, blRaw, daemonProfile, newFile string) (string, erro
 			clearKernelBypassRoutes()
 			kernelRoutes = addKernelBypassRoutes(domains)
 		}
-		_ = writeSplitCfg(profile, blRaw, newFile, kernelRoutes)
+		_ = writeSplitCfg(profile, blRaw, newFile, domains, kernelRoutes)
 		return fmt.Sprintf("socks: bypass list updated (%d domains)", len(domains)), nil
 
 	case "tun", "raw":
 		// Clear previously tracked routes, then add fresh ones via the shared helper.
 		clearKernelBypassRoutes()
 		routes := addKernelBypassRoutes(domains)
-		_ = writeSplitCfg(profile, blRaw, newFile, routes)
+		_ = writeSplitCfg(profile, blRaw, newFile, domains, routes)
 		return fmt.Sprintf("%s: bypass routes updated (%d domains, %d routes)", mode, len(domains), len(routes)), nil
 
 	default:

@@ -895,7 +895,7 @@ func tryConnectProfile(
 					fmt.Println("[*] Весь трафик теперь идет через VPN")
 
 					if splitCfg != nil {
-						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
+						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, splitRoutes)
 					}
 
 					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
@@ -951,7 +951,7 @@ func tryConnectProfile(
 							if isKernelInterfaceActive() {
 								kernelRoutes = addKernelBypassRoutes(splitCfg.domains)
 							}
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, kernelRoutes)
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, kernelRoutes)
 						}
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
@@ -996,7 +996,7 @@ func tryConnectProfile(
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
 
 						if splitCfg != nil {
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitRoutes)
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, splitRoutes)
 						}
 
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)

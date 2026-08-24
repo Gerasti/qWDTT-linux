@@ -368,10 +368,11 @@ qwdtt debug                                           # увидеть новы�
 - `-dis` / `-disabled` - показать только отключённые профили
 - `-ro` - показать только read-only профили
 - `-sub` - показать только профили, управляемые подписками
-- `-active` - показать только запущенные (активные) профили
+- `-active` / `-A` - показать только запущенные (активные) профили
+- `-no-ip` - не показывать IP (адрес сервера) профилей
 - `<group1> [group2] ...` - позиционный аргумент: показать только профили из указанных групп (поддерживается несколько)
 
-  Примеры: `qwdtt ls work`, `qwdtt ls work personal`, `qwdtt ls -ro`, `qwdtt ls -en work`
+  Примеры: `qwdtt ls work`, `qwdtt ls work personal`, `qwdtt ls -ro`, `qwdtt ls -en work`, `qwdtt ls -A`, `qwdtt ls -no-ip`
 
 ## Флаги edit
 

@@ -30,7 +30,8 @@ Profile Management:
                                 -dis/-disabled: disabled only
                                 -ro: read-only profiles only
                                 -sub: subscription-managed profiles only
-                                -active: running profiles only
+                                -active/-A: running profiles only
+                                -no-ip: hide profile server IPs
   show <name1> [name2] ...    Show profile details (alias: sh)
                                -group GROUP: show all profiles in the group
                                -sub: show all profiles managed by any subscription

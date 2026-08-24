@@ -257,14 +257,16 @@ func getProcessUsage() (*ProcessUsage, error) {
 
 // ProfileDetails holds information about a running qwdtt profile process.
 type ProfileDetails struct {
-	Mode          string   // "tun" or "socks"
-	SocksPort     int      // SOCKS5 port (only relevant for socks mode)
-	SocksUser     string   // SOCKS5 username (if specified via -socks-user)
-	SocksPass     string   // SOCKS5 password (if specified via -socks-password)
-	PID           int      // Process PID
-	BlackList     string   // raw -bl / --black-list value (space-separated domains)
-	BlackListFile string   // path to -bl-file / --black-list-file JSON file
-	SplitRoutes   []string // resolved bypass route CIDRs (from state file)
+	Mode            string   // "tun" or "socks"
+	SocksPort       int      // SOCKS5 port (only relevant for socks mode)
+	SocksUser       string   // SOCKS5 username (if specified via -socks-user)
+	SocksPass       string   // SOCKS5 password (if specified via -socks-password)
+	PID             int      // Process PID
+	BlackList       string   // raw -bl / --black-list value (space-separated domains)
+	BlackListFile   string   // path to -bl-file / --black-list-file JSON file
+	BlackListMtime  int64    // mtime (UnixNano) of bl-file at last apply; >0 if file-based
+	BlackListDomains []string // domains applied from -bl + bl-file at last apply
+	SplitRoutes     []string // resolved bypass route CIDRs (from state file)
 }
 
 // getRunningProfileDetails returns details (mode, socks port, PID) for each running profile.
@@ -391,9 +393,11 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 		}
 
 		// Prefer state file over cmdline parsing for blacklist info
-		if bl, blFile, routes := readSplitCfgFull(profile); bl != "" || blFile != "" || len(routes) > 0 {
+		if bl, blFile, routes, mtime, domains := readSplitCfgFull(profile); bl != "" || blFile != "" || len(routes) > 0 {
 			d.BlackList = bl
 			d.BlackListFile = blFile
+			d.BlackListMtime = mtime
+			d.BlackListDomains = domains
 			d.SplitRoutes = routes
 		}
 
@@ -457,11 +461,13 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 				// *current* profile (e.g. qwdtt-tp-s.bl). Mirror the per-profile
 				// loop so `qwdtt debug` / `qwdtt bl -c` reflect a hot-reloaded
 				// bl-file (qwdtt bl load).
-				if bl, blFile, routes := readSplitCfgFull(currentProfile); bl != "" || blFile != "" || len(routes) > 0 {
-					d.BlackList = bl
-					d.BlackListFile = blFile
-					d.SplitRoutes = routes
-				}
+			if bl, blFile, routes, mtime, domains := readSplitCfgFull(currentProfile); bl != "" || blFile != "" || len(routes) > 0 {
+				d.BlackList = bl
+				d.BlackListFile = blFile
+				d.BlackListMtime = mtime
+				d.BlackListDomains = domains
+				d.SplitRoutes = routes
+			}
 				details[currentProfile] = d
 			}
 		}
@@ -484,7 +490,7 @@ func getBlFileForProfile(profile string) string {
 	}
 	// Fallback: read the state file directly (covers profiles whose details
 	// didn't populate BlackListFile, e.g. a plain tun/raw profile).
-	if bl, blFile, _ := readSplitCfgFull(profile); blFile != "" {
+	if bl, blFile, _, _, _ := readSplitCfgFull(profile); blFile != "" {
 		return blFile
 	} else if bl != "" {
 		// -bl was used without a file; nothing file-based to list.
@@ -496,7 +502,9 @@ func getBlFileForProfile(profile string) string {
 		}
 	}
 	return ""
-} // getCurrentBlFile returns the bl-file path from the currently active profile.
+}
+
+// getCurrentBlFile returns the bl-file path from the currently active profile.
 // getAutoswitchMode returns the connection mode of the running autoswitch daemon
 // by parsing its process cmdline. Returns "tun", "raw", or "socks".
 // Returns "tun" as default if the PID is alive but cmdline cannot be parsed.

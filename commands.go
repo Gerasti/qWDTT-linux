@@ -560,12 +560,15 @@ func listCmd() {
 	disabled := fs.Bool("disabled", false, "Show only disabled profiles")
 	ro := fs.Bool("ro", false, "Show only read-only profiles")
 	active := fs.Bool("active", false, "Show only running profiles")
+	A := fs.Bool("A", false, "Show only running profiles (alias for -active)")
 	sub := fs.Bool("sub", false, "Show only profiles managed by any subscription")
+	noIP := fs.Bool("no-ip", false, "Do not display profile server IPs (peer column)")
 	flagArgs, groupFilters := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
 
 	showEnabled := *en || *enabled
 	showDisabled := *dis || *disabled
+	showActive := *active || *A
 	if showEnabled && showDisabled {
 		fmt.Fprintln(os.Stderr, "[ERROR] Нельзя одновременно использовать -enabled и -disabled")
 		os.Exit(1)
@@ -630,8 +633,8 @@ func listCmd() {
 		subscriptionProfiles = filterBySub(subscriptionProfiles)
 	}
 
-	// Filter: -active shows only running profiles
-	if *active {
+	// Filter: -active/-A shows only running profiles
+	if showActive {
 		filterActive := func(src []profileInfo) []profileInfo {
 			var filtered []profileInfo
 			for _, p := range src {
@@ -670,7 +673,7 @@ func listCmd() {
 		if *ro {
 			conditions = append(conditions, "read-only")
 		}
-		if *active {
+		if showActive {
 			conditions = append(conditions, "работающих")
 		}
 		suffix := ""
@@ -755,16 +758,16 @@ func listCmd() {
 				groupsStr = colorCyan + fmt.Sprintf(" [%s]", strings.Join(p.groups, ", ")) + colorReset
 			}
 
-			fmt.Printf(" %s %-*s  %-*s  %d хешей  [%s]  priority: %-3d%s%s%s\n",
-				activeMarker,
-				maxNameLen, p.name,
-				maxPeerLen, p.peer,
-				p.hashes,
-				coloredStatus,
-				p.priority,
-				groupsStr,
-				coloredPaddedMode,
-				autoswitchMarker)
+			// Build the line dynamically to optionally hide the peer (IP) column
+			lineFmt := " %s %-*s"
+			lineArgs := []interface{}{activeMarker, maxNameLen, p.name}
+			if !*noIP {
+				lineFmt += "  %-*s"
+				lineArgs = append(lineArgs, maxPeerLen, p.peer)
+			}
+			lineFmt += "  %d хешей  [%s]  priority: %-3d%s%s%s\n"
+			lineArgs = append(lineArgs, p.hashes, coloredStatus, p.priority, groupsStr, coloredPaddedMode, autoswitchMarker)
+			fmt.Printf(lineFmt, lineArgs...)
 		}
 	}
 
@@ -1577,10 +1580,10 @@ func disconnectCmd() {
 	// In autoswitch mode, also check the current profile's state file.
 	var savedSplitRoutes []string
 	if autoswitchCurrent := getAutoswitchCurrentProfile(); autoswitchCurrent != "" && autoswitchCurrent != targetProfile {
-		_, _, curRoutes := readSplitCfgFull(autoswitchCurrent)
+		_, _, curRoutes, _, _ := readSplitCfgFull(autoswitchCurrent)
 		savedSplitRoutes = append(savedSplitRoutes, curRoutes...)
 	}
-	_, _, targetRoutes := readSplitCfgFull(targetProfile)
+	_, _, targetRoutes, _, _ := readSplitCfgFull(targetProfile)
 	savedSplitRoutes = append(savedSplitRoutes, targetRoutes...)
 
 	removeSplitCfg(targetProfile)
@@ -1817,30 +1820,225 @@ func formatDomainsInColumns(domains []string, indent, sep string, cols int) stri
 	return sb.String()
 }
 
+// blDomain carries a per-domain status marker and the domain text. Prefix is
+// "pending-add" ("[!]"), "pending-remove" ("[-]") or "" for applied; it only
+// tags which domains are unapplied. The actual rendering is done as a per-row
+// marker in a separate left column by formatTaggedDomains (variant B2), so the
+// marker never participates in domain column width calculation and never
+// misaligns the domain grid.
+type blDomain struct {
+	Prefix string
+	Domain string
+}
+
+// blMarkerColW is the fixed width of the per-row status column rendered to the
+// left of the domain grid: the marker text "[!]"/"[-]" is 3 runes plus one
+// separator space. Domains are aligned independently of the marker.
+const blMarkerColW = 4
+
+// formatTaggedDomains renders the domain grid with a per-row status marker in
+// a fixed-width column to the left (variant B2). The marker reflects the whole
+// row: "[!]" if any cell in the row is a pending add, else "[-]" if any cell is
+// a pending remove, else blank. Because the marker lives in its own column and
+// the domain width is measured without it, domain columns stay aligned
+// regardless of which rows carry a marker.
+func formatTaggedDomains(tags []blDomain, indent, sep string, cols int) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	maxLen := 0
+	for _, t := range tags {
+		if len(t.Domain) > maxLen {
+			maxLen = len(t.Domain)
+		}
+	}
+	rows := (len(tags) + cols - 1) / cols
+	var sb strings.Builder
+	for r := 0; r < rows; r++ {
+		var line strings.Builder
+		line.WriteString(indent)
+		// Row-level marker (B2): a pending add in any cell wins over a pending remove.
+		rowMarker := ""
+		for c := 0; c < cols; c++ {
+			if idx := r + c*rows; idx < len(tags) && tags[idx].Prefix == "[!]" {
+				rowMarker = "[!]"
+				break
+			}
+		}
+		if rowMarker == "" {
+			for c := 0; c < cols; c++ {
+				if idx := r + c*rows; idx < len(tags) && tags[idx].Prefix == "[-]" {
+					rowMarker = "[-]"
+					break
+				}
+			}
+		}
+		line.WriteString(fmt.Sprintf("%-*s", blMarkerColW, rowMarker))
+		for c := 0; c < cols; c++ {
+			idx := r + c*rows
+			if idx >= len(tags) {
+				break
+			}
+			line.WriteString(fmt.Sprintf("%-*s", maxLen, tags[idx].Domain))
+			if c < cols-1 {
+				line.WriteString(sep)
+			}
+		}
+		sb.WriteString(strings.TrimRight(line.String(), " ") + "\n")
+	}
+	return sb.String()
+}
+
+// normalizeBlPath normalizes a bl-file path for comparison: expands ~/$VAR,
+// resolves to an absolute path, and cleans it. Empty string stays empty.
+func normalizeBlPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	expanded, err := expandPath(p)
+	if err != nil || expanded == "" {
+		expanded = p
+	}
+	if abs, err := filepath.Abs(expanded); err == nil {
+		expanded = abs
+	}
+	return filepath.Clean(expanded)
+}
+
+// isBlFilePending reports whether the bl-file on disk has been modified since
+// the daemon last applied it (recorded as appliedMtime in the state file).
+// It is true only when the file exists and its mtime is strictly greater than
+// the applied mtime, i.e. `qwdtt bl add`/`bl rm` (without -r/--reload) or an
+// external edit happened after the last connect / BL_RELOAD.
+func isBlFilePending(blFile string, appliedMtime int64) bool {
+	if blFile == "" || appliedMtime <= 0 {
+		return false
+	}
+	path := normalizeBlPath(blFile)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return fi.ModTime().UnixNano() > appliedMtime
+}
+
+// isBlPendingForProfile reports whether the profile still running has a bl-file
+// with unapplied changes. It prefers the recorded black_list_mtime; for state
+// files written by older binaries (mtime == 0) it falls back to comparing the
+// bl-file's mtime against the state file's own mtime.
+func isBlPendingForProfile(profile string, d *ProfileDetails) bool {
+	if d == nil || d.BlackListFile == "" {
+		return false
+	}
+	if d.BlackListMtime > 0 {
+		return isBlFilePending(d.BlackListFile, d.BlackListMtime)
+	}
+	return isBlFilePending(d.BlackListFile, stateFileMtime(profile))
+}
+
+// profileBlPending reports whether the running profile described by d has a
+// bl-file with unapplied changes. Returns the pending flag and the profile name.
+func profileBlPending(profile string, d *ProfileDetails) (bool, string) {
+	if d == nil {
+		return false, ""
+	}
+	prof := profile
+	if prof == "" {
+		prof = "autoswitch"
+	}
+	return isBlPendingForProfile(prof, d), prof
+}
+
+// domainKey returns a normalized, case-insensitive key for comparing domains:
+// punycode is decoded, Cyrillic is transliterated, and the result is lowercased.
+// So "ВТБ.рф", "втб.рф" and "xn--e1-...6dj" all collapse to the same key.
+func domainKey(d string) string {
+	return strings.ToLower(transliterateCyrillic(displayDomain(d)))
+}
+
+// blProfileForFile finds the running profile whose applied bl-file matches the
+// given file path. Returns the profile name, its details, and ok=false if none.
+// The autoswitch pseudo-profile is skipped; its current sub-profile is already
+// enumerated as a real entry in getRunningProfileDetails.
+func blProfileForFile(file string) (prof string, d *ProfileDetails, ok bool) {
+	if file == "" {
+		return "", nil, false
+	}
+	target := normalizeBlPath(file)
+	if target == "" {
+		return "", nil, false
+	}
+	for name, pd := range getRunningProfileDetails() {
+		if name == "autoswitch" {
+			continue
+		}
+		if normalizeBlPath(pd.BlackListFile) != target {
+			continue
+		}
+		return name, pd, true
+	}
+	return "", nil, false
+}
+
 // printBlackList outputs the blacklist configuration for a running profile.
 // Reads domains from the raw -bl value and/or resolves domains from the -bl-file JSON.
-func printBlackList(d *ProfileDetails) {
+// When the bl-file on disk has been edited (bl add/bl rm) since the daemon last
+// applied it, a pending-changes marker is shown and the profile is reported
+// through profileBlPending.
+func printBlackList(d *ProfileDetails, profile string) {
 	var blDomains []string
 	if d.BlackList != "" {
 		blDomains = splitDomains(d.BlackList)
 	}
+	var fileDomains []string
 	if d.BlackListFile != "" {
-		fileDomains, err := loadBypassRoutesFile(d.BlackListFile)
+		loaded, err := loadBypassRoutesFile(d.BlackListFile)
 		if err != nil {
 			fmt.Printf("  Black list file: [ERROR] %v\n", err)
 		} else {
+			fileDomains = loaded
 			blDomains = append(blDomains, fileDomains...)
 		}
 	}
+
+	pending, prof := profileBlPending(profile, d)
+	appliedSet := map[string]bool{}
+	for _, ad := range d.BlackListDomains {
+		appliedSet[domainKey(ad)] = true
+	}
+
 	if len(blDomains) > 0 {
 		fmt.Printf("  Black list (%d):\n", len(blDomains))
-		displayed := make([]string, len(blDomains))
-		for i, d := range blDomains {
-			displayed[i] = displayDomain(d)
+		if pending && len(appliedSet) > 0 {
+		// Pending changes are shown as a per-row marker in a separate left
+		// column (variant B2): "[!]" if the row contains a pending add, else
+		// "[-]" for a pending remove, else blank. Applied domains are listed
+		// plainly; only unapplied domains carry the prefix that drives the row.
+		tags := make([]blDomain, len(blDomains))
+		for i, dom := range blDomains {
+			tags[i] = blDomain{Domain: displayDomain(dom)}
+			if _, applied := appliedSet[domainKey(dom)]; !applied {
+				tags[i].Prefix = "[!]"
+			}
 		}
-		fmt.Print(formatDomainsInColumns(displayed, "    ", "  ", 3))
+			fmt.Print(formatTaggedDomains(tags, "    ", "  ", 3))
+		} else {
+			displayed := make([]string, len(blDomains))
+			for i, dom := range blDomains {
+				displayed[i] = displayDomain(dom)
+			}
+			fmt.Print(formatDomainsInColumns(displayed, "    ", "  ", 3))
+		}
 	} else {
 		fmt.Printf("  Black list: (не настроен)\n")
+	}
+	if pending {
+		fmt.Printf("  [!] %s: изменения в bl-file не применены (bl add/bl rm без -r). "+
+			"Примените: qwdtt bl load %s  или  qwdtt connect %s -r\n",
+			prof, d.BlackListFile, prof)
 	}
 }
 
@@ -1919,9 +2117,9 @@ func debugCmd() {
 				// not on the autoswitch pseudo-profile, so print the current
 				// profile's blacklist here (reflects hot-reloaded bl-file).
 				if curD, ok := details[currentAutoswitchProfile]; ok {
-					printBlackList(curD)
+					printBlackList(curD, currentAutoswitchProfile)
 				} else {
-					printBlackList(e.d)
+					printBlackList(e.d, currentAutoswitchProfile)
 				}
 				fmt.Println()
 				continue
@@ -1953,7 +2151,7 @@ func debugCmd() {
 			if isDaemonRunning("autoswitch") && e.name == currentAutoswitchProfile {
 				fmt.Printf("  Black list: (управляется autoswitch — см. выше)\n")
 			} else {
-				printBlackList(e.d)
+				printBlackList(e.d, e.name)
 			}
 			fmt.Println()
 		}
@@ -2570,8 +2768,8 @@ func saveBypassFile(path string, raw map[string]json.RawMessage, domains []strin
 
 func blCmd() {
 	printBlUsage := func() {
-		fmt.Fprintln(os.Stderr, "Usage: qwdtt bl <add|list|remove|find|init|load> [options] [paths/domains...]")
-		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd), init, load <path>")
+		fmt.Fprintln(os.Stderr, "Usage: qwdtt bl <add|list|remove|find|init|load|unload> [options] [paths/domains...]")
+		fmt.Fprintln(os.Stderr, "  list (ls), add, remove (rm), find (fd), init, load <path>, unload [-p PROFILE]")
 		fmt.Fprintln(os.Stderr, "  -f, --file PATH   Path to bypass routes JSON file (required, except for init/load)")
 		fmt.Fprintln(os.Stderr, "  -p, --profile PROFILE  Target a specific running profile's bl-file")
 		fmt.Fprintln(os.Stderr, "  -r, --reload          Hot-reload bl-file to the running daemon after changes (tun/raw/socks)")
@@ -2605,6 +2803,15 @@ func blCmd() {
 
 	if sub == "load" {
 		blLoad(args, *profile)
+		return
+	}
+
+	if sub == "unload" {
+		if len(args) > 0 {
+			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl unload [-p|--profile PROFILE]")
+			os.Exit(1)
+		}
+		blUnload(*profile)
 		return
 	}
 
@@ -2754,6 +2961,45 @@ func resolveBlSocket(explicitProfile string) (sock string, targetProfile, mode s
 	return sock, targetProfile, mode, nil
 }
 
+// sendBlReloadCommand resolves the daemon's control socket for the target
+// profile and sends a BL_RELOAD command so the bypass routes are re-applied.
+// When fileAbspath is empty, the daemon re-applies only the raw -bl domains
+// (effectively unloading the bl-file). When non-empty, the bl-file at that path
+// is reloaded. The explicitProfile (from -p/--profile) locates the socket; when
+// empty the active TUN/RAW profile is used.
+func sendBlReloadCommand(explicitProfile, fileAbspath string) {
+	if explicitProfile == "" && !isKernelInterfaceActive() && !rawIfaceActive() {
+		return
+	}
+
+	sock, targetProfile, mode, err := resolveBlSocket(explicitProfile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	if fileAbspath == "" {
+		fmt.Printf("[*] Сброс bl-file для профиля %q (режим %s)...\n", targetProfile, mode)
+	} else {
+		fmt.Printf("[*] Перезагрузка bl-file %q для профиля %q (режим %s)...\n", fileAbspath, targetProfile, mode)
+	}
+
+	reply, err := sendBlReload(sock, fileAbspath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	if strings.HasPrefix(reply, "RELOAD_OK|") {
+		fmt.Printf("[OK] %s\n", strings.TrimPrefix(reply, "RELOAD_OK|"))
+	} else if strings.HasPrefix(reply, "RELOAD_ERR|") {
+		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", strings.TrimPrefix(reply, "RELOAD_ERR|"))
+		os.Exit(1)
+	} else {
+		fmt.Printf("[*] Ответ демена: %s\n", reply)
+	}
+}
+
 // reloadBlFile expands/resolves the given file path and sends a BL_RELOAD
 // command to the running daemon so that the bypass routes file is re-read
 // without reconnecting. The explicitProfile (from -p/--profile) is used to
@@ -2768,32 +3014,14 @@ func reloadBlFile(file string, explicitProfile string) {
 	if err != nil {
 		abspath = expanded
 	}
+	sendBlReloadCommand(explicitProfile, abspath)
+}
 
-	if explicitProfile == "" && !isKernelInterfaceActive() && !rawIfaceActive() {
-		return
-	}
-
-	sock, targetProfile, mode, err := resolveBlSocket(explicitProfile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("[*] Перезагрузка bl-file %q для профиля %q (режим %s)...\n", abspath, targetProfile, mode)
-	reply, err := sendBlReload(sock, abspath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
-		os.Exit(1)
-	}
-
-	if strings.HasPrefix(reply, "RELOAD_OK|") {
-		fmt.Printf("[OK] %s\n", strings.TrimPrefix(reply, "RELOAD_OK|"))
-	} else if strings.HasPrefix(reply, "RELOAD_ERR|") {
-		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", strings.TrimPrefix(reply, "RELOAD_ERR|"))
-		os.Exit(1)
-	} else {
-		fmt.Printf("[*] Ответ демона: %s\n", reply)
-	}
+// blUnload hot-reloads the bypass routes of the running daemon using only the
+// raw -bl value, discarding the bl-file. Without arguments it auto-detects the
+// TUN/RAW profile; for socks profiles, specify -p/--profile.
+func blUnload(explicitProfile string) {
+	sendBlReloadCommand(explicitProfile, "")
 }
 
 // blLoad hot-reloads the bypass routes file of the currently running qwdtt
@@ -2822,27 +3050,87 @@ func blList(file string) {
 	}
 	if len(domains) == 0 {
 		fmt.Printf("[*] В файле %q нет доменов\n", file)
-		return
+	} else {
+		sorted := append([]string(nil), domains...)
+		sort.Slice(sorted, func(i, j int) bool {
+			return strings.ToLower(displayDomain(sorted[i])) < strings.ToLower(displayDomain(sorted[j]))
+		})
+		fmt.Printf("Всего: %d доменов в %q\n\n", len(sorted), file)
+
+		prof, d, found := blProfileForFile(file)
+		pending := found && isBlPendingForProfile(prof, d)
+		appliedSet := map[string]bool{}
+		pureFile := found && d.BlackList == ""
+		if found && len(d.BlackListDomains) > 0 {
+			for _, ad := range d.BlackListDomains {
+				appliedSet[domainKey(ad)] = true
+			}
+		}
+
+		// Classify file domains against the applied set. Unapplied domains get
+		// a pending-add prefix ("[!]"), which formatTaggedDomains renders as a
+		// per-row marker in a separate left column (variant B2); applied
+		// domains are listed plainly.
+		type tagged = blDomain
+		var taggedSorted []tagged
+		var removed []string
+		fileKeySet := map[string]bool{}
+		hasPending := false
+		for _, d2 := range sorted {
+			k := domainKey(d2)
+			fileKeySet[k] = true
+			if _, applied := appliedSet[k]; applied {
+				taggedSorted = append(taggedSorted, tagged{Domain: displayDomain(d2)})
+			} else {
+				taggedSorted = append(taggedSorted, tagged{Prefix: "[!]", Domain: displayDomain(d2)})
+				hasPending = true
+			}
+		}
+		if pureFile {
+			for _, ad := range d.BlackListDomains {
+				if !fileKeySet[domainKey(ad)] {
+					removed = append(removed, ad)
+					hasPending = true
+				}
+			}
+		}
+
+		if hasPending && len(appliedSet) > 0 {
+			fmt.Print(formatTaggedDomains(taggedSorted, "", "  ", 3))
+			if len(removed) > 0 {
+				fmt.Printf("\n  Удалены, но не применены (bl rm без -r):\n")
+				rmTags := make([]blDomain, 0, len(removed))
+				for _, d2 := range d.BlackListDomains {
+					if !fileKeySet[domainKey(d2)] {
+						rmTags = append(rmTags, blDomain{Prefix: "[-]", Domain: displayDomain(d2)})
+					}
+				}
+				fmt.Print(formatTaggedDomains(rmTags, "    ", "  ", 3))
+			}
+		} else {
+			// No applied set or everything matches: plain list.
+			displayed := make([]string, len(sorted))
+			for i, d2 := range sorted {
+				displayed[i] = displayDomain(d2)
+			}
+			fmt.Print(formatDomainsInColumns(displayed, "", "  ", 3))
+		}
+
+		if pending {
+			fmt.Printf("\n[!] %s: изменения в bl-file не применены "+
+				"(bl add/bl rm без -r). \nПримените: qwdtt bl load -p %s\n",
+				prof, prof)
+		}
 	}
-	sorted := append([]string(nil), domains...)
-	sort.Slice(sorted, func(i, j int) bool {
-		return strings.ToLower(displayDomain(sorted[i])) < strings.ToLower(displayDomain(sorted[j]))
-	})
-	fmt.Printf("Всего: %d доменов в %q\n\n", len(sorted), file)
-	displayed := make([]string, len(sorted))
-	for i, d := range sorted {
-		displayed[i] = displayDomain(d)
-	}
-	fmt.Print(formatDomainsInColumns(displayed, "", "  ", 3))
 }
 
 func validateBlDomains(domains []string) {
-	for _, d := range domains {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		if strings.Contains(d, ",") {
+ 	for _, d := range domains {
+ 		d = strings.TrimSpace(d)
+ 		if d == "" {
+ 			continue
+ 		}
+ 		if strings.Contains(d, ",") {
 			fmt.Fprintf(os.Stderr, "[ERROR] домен не может содержать запятую: %q\n", d)
 			os.Exit(1)
 		}

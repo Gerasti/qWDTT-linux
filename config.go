@@ -92,39 +92,73 @@ func splitCfgPath(profile string) string {
 	return filepath.Join(pidFilesDir(), "qwdtt-"+profile+".bl")
 }
 
-func writeSplitCfg(profile string, bl, blFile string, splitRoutes []string) error {
+func writeSplitCfg(profile string, bl, blFile string, appliedDomains []string, splitRoutes []string) error {
 	data, err := json.Marshal(struct {
-		BlackList     string   `json:"black_list"`
-		BlackListFile string   `json:"black_list_file"`
-		SplitRoutes   []string `json:"split_routes"`
-	}{bl, blFile, splitRoutes})
+		BlackList       string   `json:"black_list"`
+		BlackListFile   string   `json:"black_list_file"`
+		BlackListMtime  int64    `json:"black_list_mtime"`
+		BlackListDomains []string `json:"black_list_domains,omitempty"`
+		SplitRoutes     []string `json:"split_routes"`
+	}{bl, blFile, blFileMtime(blFile), appliedDomains, splitRoutes})
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(splitCfgPath(profile), data, 0o644)
 }
 
+// blFileMtime returns the modification time (UnixNano) of the bl-file, or 0 if
+// the path is empty / the file cannot be stat'd. It is recorded by
+// writeSplitCfg so that callers (connect / BL_RELOAD) can later tell whether the
+// file on disk has been edited (e.g. via `qwdtt bl add`/`bl rm` without `-r`)
+// since it was last applied to the running daemon.
+func blFileMtime(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	expanded, err := expandPath(path)
+	if err != nil || expanded == "" {
+		expanded = path
+	}
+	if fi, err := os.Stat(expanded); err == nil {
+		return fi.ModTime().UnixNano()
+	}
+	return 0
+}
+
 func readSplitCfg(profile string) (bl, blFile string) {
-	bl, blFile, _ = readSplitCfgFull(profile)
+	bl, blFile, _, _, _ = readSplitCfgFull(profile)
 	return bl, blFile
 }
 
-func readSplitCfgFull(profile string) (bl, blFile string, splitRoutes []string) {
+func readSplitCfgFull(profile string) (bl, blFile string, splitRoutes []string, blMtime int64, appliedDomains []string) {
 	data, err := os.ReadFile(splitCfgPath(profile))
 	if err != nil {
-		return "", "", nil
+		return "", "", nil, 0, nil
 	}
 	var cfg struct {
-		BlackList     string   `json:"black_list"`
-		BlackListFile string   `json:"black_list_file"`
-		SplitRoutes   []string `json:"split_routes"`
+		BlackList       string   `json:"black_list"`
+		BlackListFile   string   `json:"black_list_file"`
+		BlackListMtime  int64    `json:"black_list_mtime"`
+		BlackListDomains []string `json:"black_list_domains"`
+		SplitRoutes     []string `json:"split_routes"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", "", nil
+		return "", "", nil, 0, nil
 	}
-	return cfg.BlackList, cfg.BlackListFile, cfg.SplitRoutes
+	return cfg.BlackList, cfg.BlackListFile, cfg.SplitRoutes, cfg.BlackListMtime, cfg.BlackListDomains
 }
 
+// removeSplitCfg removes the per-profile state file.
 func removeSplitCfg(profile string) {
 	_ = os.Remove(splitCfgPath(profile))
+}
+
+// stateFileMtime returns the modification time (UnixNano) of the state file
+// qwdtt-<profile>.bl, or 0 if it cannot be stat'd. Used as a fallback for
+// state files written by older binaries that did not record black_list_mtime.
+func stateFileMtime(profile string) int64 {
+	if fi, err := os.Stat(splitCfgPath(profile)); err == nil {
+		return fi.ModTime().UnixNano()
+	}
+	return 0
 }
