@@ -278,7 +278,7 @@ func (d *Dispatcher) readLoop() {
 		nw := len(d.workers)
 		if nw == 0 {
 			d.mu.Unlock()
-			if d.tunFile != nil {
+		if d.tunFile != nil {
 				c := atomic.AddUint64(&d.tunDroppedCount, 1)
 				if c == 1 || c%50 == 0 {
 					log.Printf("[RAW-DIAG] readLoop: пакет из TUN ДРОПНУТ — нет воркеров (дропнуто=%d)", c)
@@ -384,7 +384,7 @@ func (d *Dispatcher) readLoop() {
 			d.rrIndex = (idx + 1) % nw
 			d.rrCount = 0
 			putPktBuf(pkt)
-			if d.tunFile != nil {
+	 if d.tunFile != nil {
 				c := atomic.AddUint64(&d.tunDroppedCount, 1)
 				if c == 1 || c%50 == 0 {
 					log.Printf("[RAW-DIAG] readLoop: пакет из TUN ДРОПНУТ — все воркеры перегружены (дропнуто=%d)", c)

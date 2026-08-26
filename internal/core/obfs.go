@@ -26,6 +26,67 @@ import (
 
 var aeadCache sync.Map
 
+const replayWindowSpan = uint64(4096 * 961)
+const replayWindowMaxEntries = 8192
+
+type replayWindow struct {
+	mu          sync.Mutex
+	seen        map[[12]byte]uint64
+	ssrc        uint32
+	highestTime uint64
+	initialized bool
+}
+
+func (w *replayWindow) accept(wire []byte) bool {
+	if len(wire) < rtpHeaderLenLegacy {
+		return false
+	}
+	ssrc := binary.BigEndian.Uint32(wire[8:12])
+	seq := binary.BigEndian.Uint16(wire[2:4])
+	ts := binary.BigEndian.Uint32(wire[4:8])
+	var nonce [12]byte
+	copy(nonce[:], obfsBuildNonce(ssrc, seq, ts))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.initialized {
+		w.ssrc = ssrc
+		w.highestTime = uint64(ts)
+		w.seen = make(map[[12]byte]uint64, 4096)
+		w.initialized = true
+	} else if w.ssrc != ssrc {
+		return false
+	}
+	if _, exists := w.seen[nonce]; exists {
+		return false
+	}
+	base := w.highestTime &^ uint64(0xffffffff)
+	extended := base | uint64(ts)
+	if extended+(1<<31) < w.highestTime {
+		extended += 1 << 32
+	} else if extended > w.highestTime+(1<<31) && extended >= 1<<32 {
+		extended -= 1 << 32
+	}
+	if extended+replayWindowSpan < w.highestTime {
+		return false
+	}
+	if extended > w.highestTime {
+		w.highestTime = extended
+	}
+	if len(w.seen) >= replayWindowMaxEntries {
+		cutoff := w.highestTime - min(w.highestTime, replayWindowSpan)
+		for value, packetTime := range w.seen {
+			if packetTime < cutoff {
+				delete(w.seen, value)
+			}
+		}
+		if len(w.seen) >= replayWindowMaxEntries {
+			return false
+		}
+	}
+	w.seen[nonce] = extended
+	return true
+}
+
 func getAEAD(key []byte) (cipher.AEAD, error) {
 	if len(key) != wrapKeyLen {
 		return nil, fmt.Errorf("obfs: key must be %d bytes", wrapKeyLen)
@@ -51,14 +112,25 @@ type ObfsConfig struct {
 	PaddingMax  int    // Max random padding bytes appended
 }
 
+// normalizeObfsMode normalizes the obfs mode to "audio" or "video".
+func normalizeObfsMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "video") {
+		return "video"
+	}
+	return "audio"
+}
+
 // NewObfsConfig creates a config with random SSRC and sane defaults.
-func NewObfsConfig(mode string) *ObfsConfig {
+// mode: "audio" (OPUS-like, PT 111) or "video" (H264-like, PT 96).
+func NewObfsConfig(mode string) (*ObfsConfig, error) {
 	var buf [4]byte
-	rand.Read(buf[:])
+	if _, err := rand.Read(buf[:]); err != nil {
+		return nil, err
+	}
 
 	pt := uint8(111)
 	pad := 24
-	if strings.EqualFold(strings.TrimSpace(mode), "video") {
+	if normalizeObfsMode(mode) == "video" {
 		pt = 96
 		pad = 60
 	}
@@ -67,7 +139,7 @@ func NewObfsConfig(mode string) *ObfsConfig {
 		SSRC:        binary.BigEndian.Uint32(buf[:]),
 		PayloadType: pt,
 		PaddingMax:  pad,
-	}
+	}, nil
 }
 
 // ─── Per-direction state (sequence + timestamp counters) ───
@@ -81,14 +153,16 @@ type ObfsState struct {
 }
 
 // NewObfsState creates a state with random initial seq/ts and count=0.
-func NewObfsState() *ObfsState {
+func NewObfsState() (*ObfsState, error) {
 	var buf [6]byte
-	rand.Read(buf[:])
+	if _, err := rand.Read(buf[:]); err != nil {
+		return nil, err
+	}
 	return &ObfsState{
 		initSeq: binary.BigEndian.Uint16(buf[0:2]),
 		initTs:  binary.BigEndian.Uint32(buf[2:6]),
 		count:   0,
-	}
+	}, nil
 }
 
 // ─── Nonce derivation ───
@@ -147,7 +221,9 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	padRand := 0
 	if cfg.PaddingMax > 0 {
 		var rndBuf [1]byte
-		rand.Read(rndBuf[:])
+		if _, err := rand.Read(rndBuf[:]); err != nil {
+			return nil, fmt.Errorf("obfs: padding random: %w", err)
+		}
 		padRand = int(rndBuf[0]) % cfg.PaddingMax
 	}
 	padTotal := padRand + 1 // +1 for the length byte itself
@@ -173,7 +249,9 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 	// Random padding bytes
 	padStart := headerLen + len(sealed)
 	if padRand > 0 {
-		rand.Read(out[padStart : padStart+padRand])
+		if _, err := rand.Read(out[padStart : padStart+padRand]); err != nil {
+			return nil, fmt.Errorf("obfs: padding bytes: %w", err)
+		}
 	}
 
 	// Last byte = total padding count (RFC 3550 §5.1)
@@ -184,9 +262,9 @@ func obfsWrapPacket(key, payload []byte, cfg *ObfsConfig, state *ObfsState) ([]b
 
 // ─── Unwrap (strip RTP header + decrypt) ───
 
-// obfsUnwrapPacket strips the RTP header+extension, removes padding, and decrypts the payload.
-// Returns number of plaintext bytes written to dst.
-// Header length is determined by the INCOMING packet's X bit, so a single
+// obfsUnwrapPacket strips the RTP header+extension, removes padding, and
+// decrypts the payload. Returns number of plaintext bytes written to dst.
+// Header length is determined by the X bit of the INCOMING packet, so a single
 // client transparently talks to both old (12-byte) and new (24-byte) servers.
 func obfsUnwrapPacket(key, wire, dst []byte) (int, error) {
 	if len(key) != wrapKeyLen {

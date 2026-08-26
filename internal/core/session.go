@@ -79,6 +79,7 @@ type obfsDirectConn struct {
 	wrapKey    []byte
 	cfg        *ObfsConfig
 	writeState *ObfsState
+	replay     replayWindow
 }
 
 func (c *obfsDirectConn) Read(b []byte) (int, error) {
@@ -93,6 +94,9 @@ func (c *obfsDirectConn) Read(b []byte) (int, error) {
 		}
 		m, unwrapErr := obfsUnwrapPacket(c.wrapKey, wire[:n], b)
 		if unwrapErr != nil {
+			continue
+		}
+		if !c.replay.accept(wire[:n]) {
 			continue
 		}
 		return m, nil
@@ -277,10 +281,16 @@ func RunSession(
 	var activeConn net.Conn
 	var relayWg sync.WaitGroup
 
-	if useWrap && (tp.NoDTLS || tp.RawMode) {
+ 	if useWrap && (tp.NoDTLS || tp.RawMode) {
 		// ─── Прямой режим: RTP-obfs AEAD прямо поверх TURN relay, без DTLS ───
-		obfsCfg := NewObfsConfig(tp.ObfsMode)
-		obfsWriteState := NewObfsState()
+		obfsCfg, obfsErr := NewObfsConfig(tp.ObfsMode)
+		if obfsErr != nil {
+			return false, fmt.Errorf("RTP-obfs config: %w", obfsErr)
+		}
+		obfsWriteState, obfsErr := NewObfsState()
+		if obfsErr != nil {
+			return false, fmt.Errorf("RTP-obfs state: %w", obfsErr)
+		}
 		activeConn = &obfsDirectConn{
 			relay:      relay,
 			peer:       peer,
@@ -304,12 +314,19 @@ func RunSession(
 		})
 		defer stopRelay()
 
-		// Initialize obfs config per session
+ 		// Initialize obfs config per session
 		var dtlsObfsCfg *ObfsConfig
 		var obfsWriteState *ObfsState
 		if useWrap {
-			dtlsObfsCfg = NewObfsConfig(tp.ObfsMode)
-			obfsWriteState = NewObfsState()
+			var obfsErr error
+			dtlsObfsCfg, obfsErr = NewObfsConfig(tp.ObfsMode)
+			if obfsErr != nil {
+				return false, fmt.Errorf("RTP-obfs config: %w", obfsErr)
+			}
+			obfsWriteState, obfsErr = NewObfsState()
+			if obfsErr != nil {
+				return false, fmt.Errorf("RTP-obfs state: %w", obfsErr)
+			}
 		}
 
 		// relay → pipeA (UNWRAP: strip RTP header + decrypt)
@@ -320,6 +337,7 @@ func RunSession(
 			readBufLen := readBufSize + 80
 			buf := make([]byte, readBufLen)
 			plain := make([]byte, readBufSize)
+			var replay replayWindow
 			for {
 				n, _, readErr := relay.ReadFrom(buf)
 				if readErr != nil {
@@ -334,6 +352,9 @@ func RunSession(
 					m, wrapErr := obfsUnwrapPacket(tp.WrapKey, payload, plain)
 					if wrapErr != nil {
 						log.Printf("[СЕССИЯ #%d] OBFS unwrap: %v (n=%d)", sessionID, wrapErr, n)
+						continue
+					}
+					if !replay.accept(payload) {
 						continue
 					}
 					payload = plain[:m]
@@ -495,6 +516,7 @@ func RunSession(
 	// Proxy activeConn ↔ Dispatcher
 	var proxyWg sync.WaitGroup
 	proxyWg.Add(3) // +1 for keepalive goroutine
+	sessionErrCh := make(chan error, 1)
 
 	stopConn := context.AfterFunc(sessCtx, func() {
 		_ = activeConn.SetDeadline(time.Now())
@@ -604,6 +626,10 @@ func RunSession(
 			putPktBuf(pkt)
 			if writeErr != nil {
 				log.Printf("[ВОРКЕР #%d] Ошибка Writer: %v", sessionID, writeErr)
+				select {
+				case sessionErrCh <- fmt.Errorf("transport writer: %w", writeErr):
+				default:
+				}
 				return
 			}
 		}
@@ -625,6 +651,10 @@ func RunSession(
 					continue
 				}
 				log.Printf("[ВОРКЕР #%d] Ошибка Reader: %v", sessionID, readErr)
+				select {
+				case sessionErrCh <- fmt.Errorf("transport reader: %w", readErr):
+				default:
+				}
 				return
 			}
 
@@ -653,10 +683,15 @@ func RunSession(
 	}()
 
 	proxyWg.Wait()
+	sessCancel()
 	relayWg.Wait()
 	sessionWg.Wait()
-	sessCancel()
 	log.Printf("[СЕССИЯ #%d] Завершена", sessionID)
+	select {
+	case sessionErr := <-sessionErrCh:
+		return configDelivered, sessionErr
+	default:
+	}
 	return configDelivered, nil
 }
 
@@ -746,8 +781,15 @@ func RunPing(
 	var obfsCfg *ObfsConfig
 	var obfsWriteState *ObfsState
 	if useWrap {
-		obfsCfg = NewObfsConfig(tp.ObfsMode)
-		obfsWriteState = NewObfsState()
+		var err error
+		obfsCfg, err = NewObfsConfig(tp.ObfsMode)
+		if err != nil {
+			return 0, fmt.Errorf("RTP-obfs config: %w", err)
+		}
+		obfsWriteState, err = NewObfsState()
+		if err != nil {
+			return 0, fmt.Errorf("RTP-obfs state: %w", err)
+		}
 	}
 
 	// relay -> pipeA
@@ -756,6 +798,7 @@ func RunPing(
 		defer sessCancel()
 		buf := make([]byte, readBufSize+80)
 		plain := make([]byte, readBufSize)
+		var replay replayWindow
 		for {
 			n, _, err := relay.ReadFrom(buf)
 			if err != nil {
@@ -768,6 +811,9 @@ func RunPing(
 				}
 				m, err := obfsUnwrapPacket(tp.WrapKey, payload, plain)
 				if err != nil {
+					continue
+				}
+				if !replay.accept(payload) {
 					continue
 				}
 				payload = plain[:m]

@@ -226,12 +226,16 @@ func WorkerGroup(
 			}
 
 			isTurnQuota := false
+			fastRetry := false
 			if sessErr != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				errStr := sessErr.Error()
 				errStrLower := strings.ToLower(errStr)
+				fastRetry = strings.Contains(errStrLower, "broken pipe") ||
+					strings.Contains(errStrLower, "connection reset by peer") ||
+					strings.Contains(errStrLower, "unexpected eof")
 
 				turnAllocAttrMissing := strings.Contains(errStrLower, "turn allocate") &&
 					strings.Contains(errStrLower, "attribute not found")
@@ -287,6 +291,8 @@ func WorkerGroup(
 			retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
 			if sessErr != nil && isTurnQuota {
 				retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+			} else if fastRetry {
+				retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
 			}
 			select {
 			case <-time.After(retryDelay):
