@@ -2811,7 +2811,27 @@ func blCmd() {
 	}
 
 	if sub == "load" {
-		blLoad(args, *profile)
+		// Случай 1: путь не указан ни args, ни -f/--file → ошибка (независимо от -p)
+		if (len(args) == 0 || args[0] == "") && file == "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] Путь к bl-file не указан.")
+			fmt.Fprintln(os.Stderr, "Используйте: qwdtt bl load [-p PROFILE] <path>")
+			os.Exit(1)
+		}
+		rawPath := file
+		if len(args) > 0 && args[0] != "" {
+			rawPath = args[0]
+		}
+
+		// Случай 2: путь есть, но нет -p → проверяем наличие запущенного TUN/RAW
+		if *profile == "" {
+			if getCurrentBlFile() == "" {
+				fmt.Fprintln(os.Stderr, "[ERROR] Нет запущенного профиля TUN/RAW для hot-reload.")
+				fmt.Fprintln(os.Stderr, "Укажите -p/--profile PROFILE или запустите профиль в режиме TUN/RAW.")
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "[*] Hot-reload для текущего профиля TUN/RAW\n")
+		}
+		blLoad([]string{rawPath}, *profile)
 		return
 	}
 
@@ -2819,6 +2839,14 @@ func blCmd() {
 		if len(args) > 0 {
 			fmt.Fprintln(os.Stderr, "Usage: qwdtt bl unload [-p|--profile PROFILE]")
 			os.Exit(1)
+		}
+		if *profile == "" && getCurrentBlFile() == "" {
+			fmt.Fprintln(os.Stderr, "[ERROR] Нет запущенного профиля TUN/RAW для unload.")
+			fmt.Fprintln(os.Stderr, "Укажите -p/--profile PROFILE или запустите профиль в режиме TUN/RAW.")
+			os.Exit(1)
+		}
+		if *profile != "" {
+			fmt.Fprintf(os.Stderr, "[*] Hot-reload для профиля %q\n", *profile)
 		}
 		blUnload(*profile)
 		return
