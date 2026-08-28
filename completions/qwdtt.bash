@@ -15,7 +15,7 @@ _qwdtt_completions() {
 
     # Complete main command - show only primary commands, no aliases
     if [[ $COMP_CWORD -eq 1 ]]; then
-        local commands="connect disconnect debug add edit remove move list show share enable disable import bl device-id regenerate-id log test subscription version help"
+        local commands="connect disconnect switch debug add edit remove move list show share enable disable import bl device-id regenerate-id log test subscription version help"
         # Manually filter to avoid substring matching of aliases
         local matches=()
         for word in $commands; do
@@ -49,7 +49,14 @@ _qwdtt_completions() {
     case "$cmd" in
         connect)
             if [[ $COMP_CWORD -eq 2 && $cur != -* ]]; then
-                COMPREPLY=( $(compgen -W "$profiles" -- "$cur") )
+                local running=$(qwdtt __complete_running 2>/dev/null)
+                local _filtered=""
+                if [[ -n "$profiles" ]]; then
+                    for p in $profiles; do
+                        grep -qxF "$p" <<< "$running" || _filtered="$_filtered $p"
+                    done
+                fi
+                COMPREPLY=( $(compgen -W "$_filtered" -- "$cur") )
             elif [[ $cur == -* ]]; then
                  COMPREPLY=( $(compgen -W "-workers --workers -mtu --mtu -hashes --hashes -dns --dns -captcha --captcha -timeout --timeout -auto-switch --auto-switch -mode --mode -socks-port --socks-port -socks-user --socks-user -socks-password --socks-password -pub --pub --public -raw-port --raw-port -transport --transport -toggle --toggle -log --log -black-list --black-list -bl --bl -black-list-file --black-list-file -bl-file --bl-file" -- "$cur") )
              elif [[ $prev == "-captcha" || $prev == "--captcha" ]]; then
@@ -144,7 +151,9 @@ _qwdtt_completions() {
             fi
             ;;
         disconnect)
-            if [[ $COMP_CWORD -ge 2 && $cur != -* ]]; then
+            if [[ $cur == -* ]]; then
+                COMPREPLY=( $(compgen -W "--all -all --y -y --yes -yes" -- "$cur") )
+            elif [[ $COMP_CWORD -eq 2 ]]; then
                 local running_profiles=$(qwdtt __complete_running 2>/dev/null)
                 COMPREPLY=( $(compgen -W "$running_profiles" -- "$cur") )
             fi

@@ -77,9 +77,13 @@ Connection:
   connect [profile] [flags]   Connect to VPN (alias: con)
                               If profile is not specified, interactive selection
                               Disabled profiles can be used by explicitly specifying name
-  disconnect [profile]        Disconnect from VPN (alias: discon)
-                              If profile is not specified, disconnects active profile
-  log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active) (alias: lg)
+   disconnect [profile] [--all]  Disconnect from VPN (alias: discon)
+                                If profile is not specified, disconnects active profile
+                                --all: disconnect all running profiles (exits active)
+                                -y: skip confirmation prompt (with --all)
+   switch                      Switch to next profile in auto-switch mode (alias: sw)
+                                Requires autoswitch daemon to be running
+   log [profile] [-n N] [-f]   Show daemon log file (default: autoswitch or active) (alias: lg)
                                -n N: show last N lines; -f: follow in real-time
   debug                       Show debug information about current connection(s) (alias: deb)
                                (e.g., watch -n 1 qwdtt debug)
@@ -168,7 +172,9 @@ Examples:
   qwdtt debug                      # show current connection stats
   qwdtt discon                     # disconnect active profile
   qwdtt discon myserver            # disconnect specific profile
-  qwdtt discon wlrus-n2u2          # with autoswitch: switch to next profile
+   qwdtt discon wlrus-n2u2          # with autoswitch: switch to next profile
+   qwdtt switch                     # switch to next profile in auto-switch mode
+  qwdtt discon --all               # disconnect all running profiles
   qwdtt dis myserver               # disable profile (alias for disable)
   qwdtt con disabled-profile       # can connect by explicitly specifying name
   qwdtt en myserver                # enable profile (alias for enable)
@@ -231,6 +237,8 @@ func main() {
 		connectCmd()
 	case "disconnect", "discon":
 		disconnectCmd()
+	case "switch", "sw":
+		switchCmd()
 	case "debug", "deb":
 		debugCmd()
 	case "add":
@@ -309,6 +317,11 @@ func main() {
 		}
 	case "__complete_running":
 		running := getRunningProfiles()
+		// Also include the profile currently managed by the autoswitch daemon,
+		// so completions (e.g. connect filtering) treat it as running.
+		if cur := getAutoswitchCurrentProfile(); cur != "" && isDaemonRunning("autoswitch") {
+			running[cur] = true
+		}
 		names := make([]string, 0, len(running))
 		for name := range running {
 			names = append(names, name)

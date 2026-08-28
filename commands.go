@@ -1453,12 +1453,12 @@ func isProfileRunning(profile string, runningProfiles map[string]bool) bool {
 }
 
 func disconnectCmd() {
-	var targetProfile string
-	wasExplicitlySpecified := false
-	if len(os.Args) >= 3 {
-		targetProfile = os.Args[2]
-		wasExplicitlySpecified = true
-	}
+	fs := flag.NewFlagSet("disconnect", flag.ExitOnError)
+	all := fs.Bool("all", false, "Отключить все запущенные профили")
+	yes := fs.Bool("y", false, "Skip confirmation prompt")
+	fs.BoolVar(yes, "yes", false, "Skip confirmation prompt")
+	flagArgs, names := splitFlagsAndArgs(fs, os.Args[2:])
+	fs.Parse(flagArgs)
 
 	// Collect all running profiles
 	runningDetails := getRunningProfileDetails()
@@ -1472,6 +1472,23 @@ func disconnectCmd() {
 	// Also check for autoswitch daemon
 	if isDaemonRunning("autoswitch") {
 		running = append(running, "autoswitch")
+	}
+
+	// --all mode: disconnect every running profile
+	if *all {
+		if len(names) > 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] --all несовместим с указанием профиля\n")
+			os.Exit(1)
+		}
+		disconnectAllProfiles(running, runningDetails, *yes)
+		return
+	}
+
+	var targetProfile string
+	wasExplicitlySpecified := false
+	if len(names) > 0 {
+		targetProfile = names[0]
+		wasExplicitlySpecified = true
 	}
 
 	// If no explicit target, try active profile first
@@ -1628,6 +1645,184 @@ func disconnectCmd() {
 	}
 
 	fmt.Println("[OK] Отключено")
+}
+
+// disconnectSingleProfile kills the daemon process for the given profile and
+// performs per-profile state cleanup (split-cfg removal, notification).
+// It does NOT handle autoswitch SIGUSR1 switching or WireGuard interface
+// teardown — those are handled by the caller.
+// When skipKill is true, the PID-file/pgrep kill step is skipped (e.g. for
+// a profile whose autoswitch daemon has already been terminated).
+// Returns the list of saved bypass-route CIDRs for orphaned-route cleanup.
+func disconnectSingleProfile(targetProfile string, runningDetails map[string]*ProfileDetails, skipKill bool) []string {
+	disconnectMode := "tun"
+	if d, ok := runningDetails[targetProfile]; ok {
+		disconnectMode = d.Mode
+	}
+
+ 	if !skipKill {
+		fmt.Printf("[*] Отключение профиля '%s'...\n", targetProfile)
+		if !killByPidFile(targetProfile) {
+			fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
+			killByPgrep(targetProfile)
+		}
+	}
+
+	_, _, targetRoutes, _, _ := readSplitCfgFull(targetProfile)
+	removeSplitCfg(targetProfile)
+
+	notifyDisconnectedSync(targetProfile, disconnectMode)
+
+	return targetRoutes
+}
+
+// disconnectAllProfiles stops every running profile (including the autoswitch
+// daemon) and performs global cleanup (WireGuard teardown, active-profile
+// clearing, bypass-route removal).
+func disconnectAllProfiles(running []string, runningDetails map[string]*ProfileDetails, skipConfirm bool) {
+	if len(running) == 0 {
+		fmt.Println("[!] Нет активных подключений")
+		os.Exit(1)
+	}
+
+	// Sort for consistent output (tun first, then socks, then autoswitch)
+	sort.Slice(running, func(i, j int) bool {
+		di, oki := runningDetails[running[i]]
+		dj, okj := runningDetails[running[j]]
+		mi := "tun"
+		if oki {
+			mi = di.Mode
+		}
+		mj := "tun"
+		if okj {
+			mj = dj.Mode
+		}
+		if mi == "tun" && mj == "socks" {
+			return true
+		}
+		if mi == "socks" && mj == "tun" {
+			return false
+		}
+		return running[i] < running[j]
+	})
+
+	if !skipConfirm {
+		fmt.Printf("[!] Отключить все активные профили: %v\n", running)
+		fmt.Print("Продолжить? [y/N]: ")
+		var answer string
+		if _, err := fmt.Scanf("%s", &answer); err != nil {
+			answer = ""
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Println("[OK] Отменено")
+			return
+		}
+	}
+
+	// Capture the autoswitch current profile before killing the daemon —
+	// that profile's process is owned by autoswitch, so it must be skipped
+	// during the per-profile kill step.
+	autoswitchRunning := isDaemonRunning("autoswitch")
+	autoswitchCurrent := ""
+	if autoswitchRunning {
+		autoswitchCurrent = getAutoswitchCurrentProfile()
+	}
+
+	// Stop autoswitch daemon first so it doesn't restart profiles we're
+	// about to kill.
+	if autoswitchRunning {
+		fmt.Println("[*] Остановка autoswitch daemon...")
+		if !killByPidFile("autoswitch") {
+			fmt.Printf("[*] Pid файл autoswitch не найден, fallback на pgrep...\n")
+			killByPgrep("autoswitch")
+		}
+		clearAutoswitchCurrentProfile()
+	}
+
+	activeProfile := getActiveProfile()
+	wasActive := false
+	activeWasRaw := false
+
+	// Disconnect each profile individually
+	var allSavedRoutes []string
+	for _, profile := range running {
+		if profile == "autoswitch" {
+			continue
+		}
+		// Skip the kill step for profiles without their own PID file
+		// (e.g. autoswitch-managed profiles) or for the explicit
+		// autoswitch current — those processes are already terminated.
+		_, pidErr := os.Stat(pidFilePath(profile))
+		hasOwnPidFile := pidErr == nil
+		skipKill := !hasOwnPidFile || profile == autoswitchCurrent
+		routes := disconnectSingleProfile(profile, runningDetails, skipKill)
+		allSavedRoutes = append(allSavedRoutes, routes...)
+		if profile == activeProfile {
+			wasActive = true
+			if d, ok := runningDetails[profile]; ok && d.Mode == "raw" {
+				activeWasRaw = true
+			}
+		}
+	}
+
+	// Tear down WireGuard interface (only the active profile uses wg-qwdtt)
+	if wasActive {
+		if activeWasRaw {
+			fmt.Println("[OK] Raw TUN очищен")
+		} else {
+			if err := teardownWG(); err == nil {
+				fmt.Println("[OK] WireGuard конфиг удалён")
+			}
+		}
+		clearActiveProfile()
+	}
+
+	// Fallback: remove any orphaned bypass routes that the daemons could not
+	// clean up (e.g. after SIGKILL).
+	if len(allSavedRoutes) > 0 {
+		if err := core.ClearBypassRoutes(allSavedRoutes); err != nil {
+			fmt.Printf("[WARNING] Не удалось очистить некоторые bypass-маршруты: %v\n", err)
+		} else {
+			fmt.Printf("[OK] Bypass-маршруты очищены (%d CIDR)\n", len(allSavedRoutes))
+		}
+	}
+
+	fmt.Println("[OK] Все профили отключены")
+}
+
+func switchCmd() {
+	if !isDaemonRunning("autoswitch") {
+		fmt.Fprintln(os.Stderr, "[ERROR] Авто-переключение не запущено. Используйте: qwdtt con -auto-switch")
+		os.Exit(1)
+	}
+
+	currentProfile := getAutoswitchCurrentProfile()
+
+	pid, err := readPidForProfile("autoswitch")
+	if err != nil || pid <= 0 {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось определить PID autoswitch daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось отправить сигнал autoswitch daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	clearAutoswitchCurrentProfile()
+
+	if currentProfile != "" {
+		mode := "tun"
+		runningDetails := getRunningProfileDetails()
+		if d, ok := runningDetails[currentProfile]; ok {
+			mode = d.Mode
+		}
+		notifyDisconnectedSync(currentProfile, mode)
+		fmt.Printf("[OK] Переключение с профиля '%s' на следующий...\n", currentProfile)
+	} else {
+		fmt.Println("[OK] Переключение на следующий профиль...")
+	}
 }
 
 func logCmd() {

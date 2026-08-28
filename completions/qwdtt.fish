@@ -5,6 +5,15 @@ function __qwdtt_profiles
     qwdtt __complete_enabled 2>/dev/null
 end
 
+# Helper that returns enabled profiles which are NOT currently running
+function __qwdtt_available_connect_profiles
+    set -l enabled (qwdtt __complete_enabled 2>/dev/null)
+    set -l running (qwdtt __complete_running 2>/dev/null)
+    for p in $enabled
+        contains $p $running; or printf '%s\n' $p
+    end
+end
+
 # Helper function to get all profile names
 function __qwdtt_all_profiles
     qwdtt __complete_all 2>/dev/null
@@ -67,10 +76,20 @@ function __qwdtt_seen_command
     return 1
 end
 
+# Check if no non-flag positional argument has been given yet after the command
+function __qwdtt_no_positional_arg
+    set -l cmd (commandline -opc)
+    for w in $cmd[3..]
+        string match -q -- "-*" $w; or return 1
+    end
+    return 0
+end
+
 # Main commands (only primary commands, no aliases in completion list)
 complete -c qwdtt -f
 complete -c qwdtt -n __fish_use_subcommand -a connect -d "Connect to VPN"
 complete -c qwdtt -n __fish_use_subcommand -a disconnect -d "Disconnect from VPN"
+complete -c qwdtt -n __fish_use_subcommand -a switch -d "Switch to next profile in auto-switch mode"
 complete -c qwdtt -n __fish_use_subcommand -a debug -d "Show debug information"
 complete -c qwdtt -n __fish_use_subcommand -a add -d "Add profile"
 complete -c qwdtt -n __fish_use_subcommand -a edit -d "Edit profile"
@@ -113,21 +132,21 @@ complete -c qwdtt -n __fish_use_subcommand -a version -d "Show version"
 complete -c qwdtt -n __fish_use_subcommand -a help -d "Show help"
 
 # connect/con - profile names and flags
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -a "(__qwdtt_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command connect con; and __qwdtt_no_positional_arg; and __qwdtt_last_is_not_flag" -f -a "(__qwdtt_available_connect_profiles)" -d "Profile"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s workers -l workers -d "Number of workers"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s mtu -l mtu -d "Tunnel MTU"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s hashes -l hashes -d "VK hashes (comma-separated)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s dns -l dns -d "DNS resolver"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s captcha -l captcha -d "Captcha bypass mode" -a "auto rjs"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -s captcha -l captcha -d "Captcha bypass mode" -a "auto rjs"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s timeout -l timeout -d "Connection timeout (seconds)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s auto-switch -l auto-switch -d "Auto-switch on failure"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s mode -l mode -d "Connection mode" -a "tun socks raw"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -s mode -l mode -d "Connection mode" -a "tun socks raw"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s socks-port -l socks-port -d "SOCKS5 port (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s socks-user -l socks-user -d "SOCKS5 username (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s socks-password -l socks-password -d "SOCKS5 password (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s pub -l pub -l public -d "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s raw-port -l raw-port -d "Raw mode server port (only with -mode raw)"
-complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s transport -l transport -d "Transport to TURN relay" -a "udp tcp"
+complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -r -s transport -l transport -d "Transport to TURN relay" -a "udp tcp"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s toggle -l toggle -d "Stop running profile, or start if not running"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s black-list -l black-list -a "bl" -d "These domains go direct"
 complete -c qwdtt -n "__qwdtt_seen_command connect con" -f -s bl -l bl -d "Alias for --black-list"
@@ -159,7 +178,9 @@ function __qwdtt_running_profiles
     qwdtt __complete_running 2>/dev/null
 end
 
-complete -c qwdtt -n "__qwdtt_seen_command disconnect discon" -f -a "(__qwdtt_running_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command disconnect discon; and __qwdtt_no_positional_arg; and __qwdtt_last_is_not_flag" -f -a "(__qwdtt_running_profiles)" -d "Profile"
+complete -c qwdtt -n "__qwdtt_seen_command disconnect discon" -f -s all -l all -d "Отключить все запущенные профили"
+complete -c qwdtt -n "__qwdtt_seen_command disconnect discon" -f -s y -l y -s yes -l yes -d "Skip confirmation prompt (with --all)"
 
 # enable/en - only disabled profiles and -group flag
 complete -c qwdtt -n "__qwdtt_seen_command enable en; and not __qwdtt_last_is_group_flag" -f -a "(__qwdtt_disabled_profiles)" -d "Profile"

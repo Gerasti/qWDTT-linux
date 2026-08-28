@@ -214,8 +214,12 @@ qwdtt con --mode socks --public --socks-port 9051
 # Отключить текущий профиль autoswitch (переключится на следующий)
 qwdtt discon <current-profile-name>
 
+# Принудительно переключиться на следующий профиль в auto-switch режиме
+qwdtt switch
+
 # Отключиться
 qwdtt disconnect (выбор, если несколько)
+qwdtt discon --all  # отключить все запущенные профили
 
 # Управление
 qwdtt ls                    # список
@@ -243,7 +247,8 @@ qwdtt share myserver | tail -n1 | wl-copy  # скопировать share-ссы
 
 ```
 qwdtt connect <profile> [флаги]      - Подключиться к VPN (alias: con; без профиля — интерактивный выбор)
-qwdtt disconnect [profile]           - Отключиться от VPN (alias: discon; без профиля — отключить активный)
+qwdtt disconnect [profile] [--all] [-y]   - Отключиться от VPN (alias: discon; без профиля — отключить активный; --all — отключить все профили; -y — пропустить подтверждение)
+qwdtt switch                         - Переключить на следующий профиль в auto-switch режиме (alias: sw)
 qwdtt log [profile] [-n N] [-f]      - Показать лог демона (alias: lg; без профиля — autoswitch или активный)
 qwdtt share <name> [-qwdtt|-q] [-group GROUP] - Показать share-ссылку и QR-код (-qwdtt/-q: qwdtt://config? формат)
 qwdtt debug                          - Показать debug информацию о соединении (alias: deb)
