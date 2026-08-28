@@ -48,14 +48,43 @@ func testCmd() {
 	socksPort := fs.Int("socks-port", defaultSocksPort, "SOCKS5 port (only with -mode socks)")
 	socksUser := fs.String("socks-user", "", "SOCKS5 username (only with -mode socks)")
 	socksPass := fs.String("socks-password", "", "SOCKS5 password (only with -mode socks)")
-	pubFlag := fs.Bool("pub", false, "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)")
-	fs.BoolVar(pubFlag, "public", false, "Alias for --pub")
-	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default: udp)")
+ 	pubFlag := fs.Bool("pub", false, "Listen on 0.0.0.0 instead of 127.0.0.1 (only with -mode socks)")
+ 	fs.BoolVar(pubFlag, "public", false, "Alias for --pub")
+ 	socksListen := fs.String("listen", "", "Bind SOCKS5 to a specific address instead of 127.0.0.1 (only with -mode socks)")
+ 	transport := fs.String("transport", "udp", "Transport to TURN relay: udp or tcp (default: udp)")
 	group := fs.String("group", "", "Test all profiles in this group")
 	sub := fs.Bool("sub", false, "Test all profiles managed by any subscription")
 
 	flagArgs, args := splitFlagsAndArgs(fs, os.Args[2:])
 	fs.Parse(flagArgs)
+
+ 	if *socksListen != "" && *pubFlag {
+ 		fmt.Fprintln(os.Stderr, "[ERROR] -listen и -pub/--public несовместимы (взаимоисключающие)")
+ 		os.Exit(1)
+ 	}
+
+ 	if *pubFlag && *mode != "socks" {
+ 		fmt.Fprintln(os.Stderr, "[ERROR] -pub/--public применяется только с -mode socks")
+ 		os.Exit(1)
+ 	}
+
+ 	if *socksListen != "" && *mode != "socks" {
+  		fmt.Fprintln(os.Stderr, "[ERROR] -listen применяется только с -mode socks")
+  		os.Exit(1)
+  	}
+
+	if *socksListen != "" {
+		if err := validateSocksListenAddr(*socksListen); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] -listen: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if *mode == "socks" && (*pubFlag || isPublicSocksBind(*socksListen)) {
+		if *socksUser == "" || *socksPass == "" {
+			fmt.Fprintln(os.Stderr, "[WARNING] При публичном SOCKS5 (--pub/--public/--listen не на loopback) рекомендуется указать и -socks-user, и -socks-password для аутентификации (иначе доступ без пароля будет открыт извне)")
+		}
+	}
 
 	if *group != "" {
 		members := profilesInGroup(*group)
@@ -190,7 +219,7 @@ func testCmd() {
 	})
 
 	for i, label := range linkLabels {
-		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *transport, label)
+		result := testProfileFromLink(links[i], time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *socksListen, *transport, label)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -203,7 +232,7 @@ func testCmd() {
 	}
 
 	for idx, name := range targetProfiles {
-		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *transport)
+		result := testProfile(name, time.Duration(*timeoutSec)*time.Second, *mode, *socksPort, *socksUser, *socksPass, *pubFlag, *socksListen, *transport)
 		if result.VKAuth == "✓" && result.Connect == "✓" && result.InternetCheck == "✓" {
 			passCount++
 		} else {
@@ -218,7 +247,7 @@ func testCmd() {
 	fmt.Printf("=== Summary: %d passed, %d failed ===\n", passCount, failCount)
 }
 
-func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, transport string) TestResult {
+func testProfile(name string, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, socksListenAddr string, transport string) TestResult {
 	// Suppress internal log output — only show test stage results
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
@@ -280,18 +309,20 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 	if cfg.Workers <= 0 {
 		cfg.Workers = defaultWorkers
 	}
-	if mode == "socks" {
-		cfg.Listen = "127.0.0.1:0"
-		if pubFlag {
-			cfg.SocksBindAddr = "0.0.0.0"
-		} else {
-			cfg.SocksBindAddr = "127.0.0.1"
-		}
-	} else if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:" + defaultListenPort
-	}
+ 	if mode == "socks" {
+ 		cfg.Listen = "127.0.0.1:0"
+ 		if pubFlag {
+ 			cfg.SocksBindAddr = "0.0.0.0"
+ 		} else if socksListenAddr != "" {
+ 			cfg.SocksBindAddr = socksListenAddr
+ 		} else {
+ 			cfg.SocksBindAddr = "127.0.0.1"
+ 		}
+ 	} else if cfg.Listen == "" {
+ 		cfg.Listen = "127.0.0.1:" + defaultListenPort
+ 	}
 
-	cs := newCaptchaSocket(name)
+ 	cs := newCaptchaSocket(name)
 	_ = cs.Start()
 	defer cs.Stop()
 
@@ -474,7 +505,7 @@ func testProfile(name string, timeout time.Duration, mode string, socksPort int,
 // testInternetCheck pings 8.8.8.8 and 1.1.1.1 through the tunnel/proxy.
 // In tun mode, pings directly through the wg-qwdtt interface.
 // In socks mode, uses curl via the SOCKS5 proxy.
-func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, transport string, linkStr string) TestResult {
+func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, socksPort int, socksUser, socksPass string, pubFlag bool, socksListenAddr string, transport string, linkStr string) TestResult {
 	origLogOutput := log.Writer()
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(origLogOutput)
@@ -510,18 +541,20 @@ func testProfileFromLink(link WdttLink, timeout time.Duration, mode string, sock
 		RawPort:     "56003",
 		Transport:   transport,
 	}
-	if mode == "socks" {
-		cfg.Listen = "127.0.0.1:0"
-		if pubFlag {
-			cfg.SocksBindAddr = "0.0.0.0"
-		} else {
-			cfg.SocksBindAddr = "127.0.0.1"
-		}
-	} else if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:" + defaultListenPort
-	}
+ 	if mode == "socks" {
+ 		cfg.Listen = "127.0.0.1:0"
+ 		if pubFlag {
+ 			cfg.SocksBindAddr = "0.0.0.0"
+ 		} else if socksListenAddr != "" {
+ 			cfg.SocksBindAddr = socksListenAddr
+ 		} else {
+ 			cfg.SocksBindAddr = "127.0.0.1"
+ 		}
+ 	} else if cfg.Listen == "" {
+ 		cfg.Listen = "127.0.0.1:" + defaultListenPort
+ 	}
 
-	c, err := core.New(cfg)
+ 	c, err := core.New(cfg)
 	if err != nil {
 		result.Error = err.Error()
 		fmt.Printf("  [✗] VKAuth (ошибка запуска: %v)\n", err)

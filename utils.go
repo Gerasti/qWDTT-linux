@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -261,7 +263,8 @@ type ProfileDetails struct {
 	SocksPort        int      // SOCKS5 port (only relevant for socks mode)
 	SocksUser        string   // SOCKS5 username (if specified via -socks-user)
 	SocksPass        string   // SOCKS5 password (if specified via -socks-password)
-	SocksPublic      bool     // SOCKS5 listening on 0.0.0.0 (via -pub/--public)
+ 	SocksPublic      bool     // SOCKS5 listening on 0.0.0.0 (via -pub/--public)
+ 	SocksListenAddr   string   // SOCKS5 bind address (via -listen)
 	PID              int      // Process PID
 	BlackList        string   // raw -bl / --black-list value (space-separated domains)
 	BlackListFile    string   // path to -bl-file / --black-list-file JSON file
@@ -340,6 +343,21 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 			for _, field := range fields {
 				if field == "-pub" || field == "--pub" || field == "-public" || field == "--public" {
 					d.SocksPublic = true
+					break
+				}
+			}
+			// Check for --listen / -listen flag (value can be space-separated or =join)
+			for i, field := range fields {
+				if (field == "-listen" || field == "--listen") && i+1 < len(fields) {
+					d.SocksListenAddr = fields[i+1]
+					break
+				}
+				if strings.HasPrefix(field, "--listen=") {
+					d.SocksListenAddr = strings.TrimPrefix(field, "--listen=")
+					break
+				}
+				if strings.HasPrefix(field, "-listen=") {
+					d.SocksListenAddr = strings.TrimPrefix(field, "-listen=")
 					break
 				}
 			}
@@ -426,6 +444,7 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 				mode := "tun"
 				socksPort := 0
 				socksPublic := false
+				socksListenAddr := ""
 				if err == nil {
 					cmdline := strings.ReplaceAll(string(cmdlineData), "\x00", " ")
 					if strings.Contains(cmdline, "-mode socks") || strings.Contains(cmdline, "--mode=socks") ||
@@ -463,16 +482,32 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 								break
 							}
 						}
+						// Check for --listen / -listen flag
+						for i, field := range fields {
+							if (field == "-listen" || field == "--listen") && i+1 < len(fields) {
+								socksListenAddr = fields[i+1]
+								break
+							}
+							if strings.HasPrefix(field, "--listen=") {
+								socksListenAddr = strings.TrimPrefix(field, "--listen=")
+								break
+							}
+							if strings.HasPrefix(field, "-listen=") {
+								socksListenAddr = strings.TrimPrefix(field, "-listen=")
+								break
+							}
+						}
 					} else if strings.Contains(cmdline, "-mode raw") || strings.Contains(cmdline, "--mode=raw") ||
 						strings.Contains(cmdline, "-mode=raw") {
 						mode = "raw"
 					}
 				}
 				d := &ProfileDetails{
-					Mode:        mode,
-					SocksPort:   socksPort,
-					SocksPublic: socksPublic,
-					PID:         autoswitchPid,
+					Mode:             mode,
+					SocksPort:        socksPort,
+					SocksPublic:      socksPublic,
+					SocksListenAddr:  socksListenAddr,
+					PID:              autoswitchPid,
 				}
 				// Autoswitch does not have its own split-cfg; it lives on the
 				// *current* profile (e.g. qwdtt-tp-s.bl). Mirror the per-profile
@@ -580,4 +615,116 @@ func getCurrentBlFile() string {
 		}
 	}
 	return ""
+}
+
+// validateSocksListenAddr проверяет, что addr — валидный IP-адрес, пригодный
+// для привязки SOCKS5-сервера. Отклоняет:
+//   - не-IP строки;
+//   - сетевые (network) и широковещательные (broadcast) адреса локальных подсетей;
+//
+// 0.0.0.0, loopback и host-адреса (/32, /128, /31, /127) допускаются.
+func validateSocksListenAddr(addr string) error {
+	if addr == "" {
+		return nil
+	}
+
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return fmt.Errorf("'%s' не является валидным IP-адресом", addr)
+	}
+
+	// 0.0.0.0 — слушать все интерфейсы (аналог --public)
+	if ip.IsUnspecified() {
+		return nil
+	}
+
+	// 127.x.x.x — loopback, разрешён
+	if ip.IsLoopback() {
+		return nil
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		// Не удалось перечислить интерфейсы — не будем блокировать
+		return nil
+	}
+
+	found := false
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			switch v := a.(type) {
+			case *net.IPNet:
+				if ip.Equal(v.IP) {
+					found = true
+				}
+			case *net.IPAddr:
+				if ip.Equal(v.IP) {
+					found = true
+				}
+			}
+
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ones, bits := ipNet.Mask.Size()
+			// /32 (IPv4) или /128 (IPv6) — host-адрес, допустим
+			if ones == bits {
+				continue
+			}
+			// /31 (IPv4) или /127 (IPv6) — p2p, оба адреса пригодны
+			if ones == bits-1 {
+				continue
+			}
+
+			// Сетевой адрес подсети: маскируем ipNet.IP, чтобы получить network address
+			networkAddr := ipNet.IP.Mask(ipNet.Mask)
+			if ip.Equal(networkAddr) {
+				return fmt.Errorf("'%s' — это сетевой (network) адрес подсети %s на интерфейсе %s", addr, ipNet.String(), iface.Name)
+			}
+
+			// Широковещательный адрес (IPv4 только)
+			if v4 := ip.To4(); v4 != nil {
+				if v4Net := networkAddr.To4(); v4Net != nil {
+					networkInt := binary.BigEndian.Uint32(v4Net)
+					maskInt := binary.BigEndian.Uint32(ipNet.Mask)
+					broadcastInt := networkInt | ^maskInt
+					broadcastIP := make(net.IP, 4)
+					binary.BigEndian.PutUint32(broadcastIP, broadcastInt)
+					if ip.Equal(broadcastIP) {
+						return fmt.Errorf("'%s' — это широковещательный (broadcast) адрес подсети %s на интерфейсе %s", addr, ipNet.String(), iface.Name)
+					}
+				}
+			}
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("'%s' не назначен ни одному локальному интерфейсу", addr)
+	}
+
+	return nil
+}
+
+// isPublicSocksBind reports whether the given SOCKS listen address is
+// bound to all interfaces (0.0.0.0 or ::), i.e. reachable from outside.
+// It returns false for loopback (127.0.0.1, ::1), specific LAN IPs
+// (e.g. 192.168.1.5), empty, or invalid strings.
+func isPublicSocksBind(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsUnspecified()
 }

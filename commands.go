@@ -880,13 +880,15 @@ func showCmd() {
 
 		details := getRunningProfileDetails()
 		if d, ok := details[name]; ok {
-			fmt.Printf("  Режим: %s\n", d.Mode)
-			if d.Mode == "socks" {
-				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
-				if d.SocksPublic {
-					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
-				}
-			}
+ 			fmt.Printf("  Режим: %s\n", d.Mode)
+ 			if d.Mode == "socks" {
+ 				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+ 				if d.SocksPublic {
+ 					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+ 				} else if d.SocksListenAddr != "" {
+ 					fmt.Printf("  SOCKS5 прослушивание: %s\n", d.SocksListenAddr)
+ 				}
+ 			}
 			fmt.Printf("  PID: %d\n", d.PID)
 		}
 
@@ -2298,6 +2300,8 @@ func debugCmd() {
 					fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
 					if e.d.SocksPublic {
 						fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+					} else if e.d.SocksListenAddr != "" {
+						fmt.Printf("  SOCKS5 прослушивание: %s\n", e.d.SocksListenAddr)
 					}
 				}
 				fmt.Printf("  PID: %d\n", e.d.PID)
@@ -2342,6 +2346,8 @@ func debugCmd() {
 				fmt.Printf("  SOCKS5 порт: %d\n", e.d.SocksPort)
 				if e.d.SocksPublic {
 					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+				} else if e.d.SocksListenAddr != "" {
+					fmt.Printf("  SOCKS5 прослушивание: %s\n", e.d.SocksListenAddr)
 				}
 			}
 			fmt.Printf("  PID: %d\n", e.d.PID)

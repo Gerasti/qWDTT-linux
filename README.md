@@ -342,6 +342,9 @@ mv     - move
 - `-socks-user USER` - логин SOCKS5 (только с `-mode socks`)
 - `-socks-password PASS` - пароль SOCKS5 (только с `-mode socks`)
 - `-pub` / `--public` - слушать на 0.0.0.0 вместо 127.0.0.1 (только с `-mode socks`)
+  - При публичном доступе (0.0.0.0: `--pub`/`--public` или `-listen 0.0.0.0`) рекомендуется указать `-socks-user` и `-socks-password` для аутентфикации; иначе SOCKS5 доступен без пароля извне (выводится предупреждение)
+- `-listen ADDR` - привязать SOCKS5 к конкретному адресу вместо 127.0.0.1 (только с `-mode socks`)
+  - Пример: `0.0.0.0`, `192.168.1.5` (не совместим с `-pub`/`--public`)
 - `-raw-port PORT` - порт для raw TUN режима (default: 56003, требуется с `-mode raw`)
 - `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp). Использовать `tcp`, если UDP до TURN-relay блокируется
 - `-log` - выводить лог демона в терминал в реальном времени
@@ -434,6 +437,10 @@ qwdtt bl unload -p socks-profile                      # для socks профи�
 - `-socks-port PORT` - порт SOCKS5 (default: 9050, с `-mode socks`)
 - `-socks-user USER` - логин SOCKS5 (только с `-mode socks`)
 - `-socks-password PASS` - пароль SOCKS5 (только с `-mode socks`)
+- `-pub` / `--public` - слушать на 0.0.0.0 вместо 127.0.0.1 (только с `-mode socks`)
+  - При публичном доступе рекомендуется `-socks-user` и `-socks-password` для аутентификации (иначе — предупреждение)
+- `-listen ADDR` - привязать SOCKS5 к конкретному адресу вместо 127.0.0.1 (только с `-mode socks`)
+  - Пример: `0.0.0.0`, `192.168.1.5` (не совместим с `-pub`/`--public`)
 - `-transport TRANSPORT` - транспорт до TURN-relay: `udp` или `tcp` (default: udp)
 - `-timeout N` - таймаут подключения в секундах (default: 10)
 - `-delay N` - пауза между профилями в секундах (default: 5)
