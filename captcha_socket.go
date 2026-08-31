@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"qwdtt/internal/core"
 )
 
 type CaptchaSocket struct {
@@ -15,6 +18,12 @@ type CaptchaSocket struct {
 	listener net.Listener
 	solveCh  chan string
 	closed   bool
+	// router, when set (socks-mode daemons only), backs the read-only GET_BL
+	// control command so that concurrent kernel (raw/tun) daemons can discover
+	// this socks profile's bypass domains. It is nil until SetRouter is called,
+	// which means GET_BL answers NOT_READY until then (avoids the race where a
+	// kernel daemon queries the socket before the socks router is initialized).
+	router atomic.Pointer[core.Router]
 }
 
 func newCaptchaSocket(profile string) *CaptchaSocket {
@@ -22,6 +31,14 @@ func newCaptchaSocket(profile string) *CaptchaSocket {
 		path:    socketPath(profile),
 		solveCh: make(chan string, 1),
 	}
+}
+
+// SetRouter attaches the socks-mode bypass Router so the control socket can
+// serve read-only GET_BL introspection. Called once after the WireproxyRunner
+// (and its Router) is created; before that, GET_BL returns NOT_READY. In
+// kernel (tun/raw) daemons no router is ever attached.
+func (cs *CaptchaSocket) SetRouter(r *core.Router) {
+	cs.router.Store(r)
 }
 
 func (cs *CaptchaSocket) Start() error {
@@ -67,6 +84,23 @@ func (cs *CaptchaSocket) handleConn(conn net.Conn) {
 		if strings.HasPrefix(line, "BL_RELOAD|") {
 			newFile := strings.TrimPrefix(line, "BL_RELOAD|")
 			fmt.Fprintf(conn, "%s\n", handleBlReload(newFile))
+			break
+		}
+		if line == "GET_BL" {
+			// Read-only introspection used by kernel (raw/tun) daemons to
+			// discover this socks profile's current bypass domains. NOT_READY
+			// (router not attached yet) is intentionally distinct from an empty
+			// list (END_BL immediately): it signals "try again later" rather
+			// than "no domains".
+			r := cs.router.Load()
+			if r == nil {
+				fmt.Fprintf(conn, "NOT_READY\n")
+				break
+			}
+			for _, d := range r.SnapshotDomains() {
+				fmt.Fprintf(conn, "%s\n", d)
+			}
+			fmt.Fprintf(conn, "END_BL\n")
 			break
 		}
 	}

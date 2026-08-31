@@ -56,6 +56,9 @@ Profile Management:
   bl init [PATH]            Create new bypass routes file (default: qwdtt_bl.json)
   bl load <path>            Hot-reload bl-file for the running tun/raw/socks connection
                             (replaces current bl-file, -bl domains merged, NO reconnect)
+                            NOTE: re-syncing bypass rules to an already-running kernel (tun/raw)
+                            interface is one-shot on its connect. A socks hot-reload afterwards
+                            needs a kernel-profile reconnect to take effect in routes.
   bl unload [-p|--profile PROFILE]  Hot-reload keeping only inline -bl domains, discarding bl-file
                             (drops file-based domains, keeps -bl set at connect; NO reconnect;
                              auto-detects TUN/RAW profile; -p for socks profiles)
@@ -148,7 +151,12 @@ Connect Flags:
                                  Space-separated, e.g. -bl vk.ru yandex.ru (tun, socks, raw modes)
                                  Domains can also be passed as positional args after -bl
   -bl-file PATH, --black-list-file  Read domains from JSON file (bypassRoutes field). Can combine with -bl
-                                e.g. -bl-file ./qwdtt_bypass_sites.json (tun, socks, raw modes)
+                                 e.g. -bl-file ./qwdtt_bypass_sites.json (tun, socks, raw modes)
+                                 NOTE: when a kernel (tun/raw) profile connects AFTER an already-running
+                                 socks-mode profile, the socks profile's bypass domains are synced into
+                                 the kernel routes so they go direct. Hot-reload of a socks profile's
+                                 bl (-bl/-bl-file with -r/-reload) is NOT re-synced to an already up
+                                 kernel interface until the kernel profile is reconnected.
 
 Edit Flags:
   -peer ADDR                  Change server address (IP:PORT)

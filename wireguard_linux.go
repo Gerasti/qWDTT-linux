@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -386,7 +387,10 @@ func applyWGConfig(config string, turnIPs []string, splitCfg *splitTunnelConfig)
 	if gateway != nil {
 		applyTurnIPsBypass(turnIPs, gateway)
 
-		// Blacklist: более специфичные маршруты через прямой шлюз (обход туннеля)
+		// Blacklist: более специфичные маршруты через прямой шлюз (обход туннеля).
+		// Bypass-домены уже запущенных socks-профилей добавляются в connect.go
+		// перед вызовом applyWGConfig (см. mergeBypassDomains + fetchActiveSocksBypassDomains),
+		// чтобы direct-трафик socks не capture-ился нашим wg-qwdtt 0.0.0.0/1.
 		addKernelBypassRoutes(splitCfgDomains) // routes tracked in splitRoutes
 	}
 
@@ -601,6 +605,130 @@ func addKernelBypassRoutes(domains []string) []string {
 // clearKernelBypassRoutes removes all kernel bypass routes tracked in splitRoutes.
 func clearKernelBypassRoutes() {
 	clearSplitRoutes()
+}
+
+// mergeBypassDomains unions own with the bypass domains observed from other
+// (socks) profiles, de-duplicating while preserving first-seen order via the
+// existing dedupKeepOrder helper. Order matters for deterministic route sets.
+func mergeBypassDomains(own []string, others ...[]string) []string {
+	out := append([]string(nil), own...)
+	for _, o := range others {
+		out = append(out, o...)
+	}
+	return dedupKeepOrder(out)
+}
+
+var errSocksRouterNotReady = errors.New("socks bypass router not ready")
+
+// fetchActiveSocksBypassDomains queries (read-only) every already-running
+// socks-mode daemon for its current bypass domains and returns their union.
+// The query is parallel across profiles, bounded by a 2s per-socket deadline
+// and a 3s global budget, so a single slow/unresponsive daemon cannot stall a
+// kernel (tun/raw) connect. Any single failure is logged and skipped — never
+// aborted — matching the "add what we can, don't block connect" contract.
+//
+// ownProfile is skipped when non-empty (avoids a redundant self-query; the
+// Mode=="socks" filter already excludes kernel daemons, so the normal case is
+// covered regardless). Known limitation (see README): hot-reload of a socks
+// profile after this one-time sync does NOT trigger a re-sync.
+func fetchActiveSocksBypassDomains(ownProfile string) []string {
+	details := getRunningProfileDetails()
+	collected := make([][]string, 0, len(details))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for profile, d := range details {
+		if d.Mode != "socks" {
+			continue
+		}
+		if profile == ownProfile {
+			continue
+		}
+		sk := socketPath(profile)
+		if !isUnderRuntimeDir(sk) {
+			fmt.Printf("[WARNING] bypass sync: profile %q socket %q вне XDG_RUNTIME_DIR — GET_BL пропущен (security)\n",
+				profile, sk)
+			continue
+		}
+		wg.Add(1)
+		go func(p, sk string) {
+			defer wg.Done()
+			domains, err := querySocksBypass(sk, 2*time.Second)
+			if err != nil {
+				if !errors.Is(err, errSocksRouterNotReady) {
+					fmt.Printf("[WARNING] bypass sync: profile %q GET_BL: %v\n", p, err)
+				}
+				return
+			}
+			if len(domains) == 0 {
+				return
+			}
+			mu.Lock()
+			collected = append(collected, domains)
+			mu.Unlock()
+		}(profile, sk)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		fmt.Printf("[WARNING] bypass sync: global 3s timeout waiting for socks profiles\n")
+	}
+	var out []string
+	for _, d := range collected {
+		out = append(out, d...)
+	}
+	return out
+}
+
+// querySocksBypass dials a socks daemon control socket and returns its
+// bypass domains via the read-only GET_BL command. An empty list (END_BL
+// received immediately) is a valid, non-error answer. NOT_READY signals that
+// the daemon has no bypass Router attached yet (e.g. still starting).
+func querySocksBypass(socketPath string, timeout time.Duration) ([]string, error) {
+	conn, err := net.DialTimeout("unix", socketPath, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, err
+	}
+	if _, err := fmt.Fprintln(conn, "GET_BL"); err != nil {
+		return nil, err
+	}
+	sc := bufio.NewScanner(conn)
+	var domains []string
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		switch line {
+		case "END_BL":
+			return domains, nil
+		case "NOT_READY":
+			return nil, errSocksRouterNotReady
+		}
+		if line == "" {
+			continue
+		}
+		domains = append(domains, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("unexpected EOF from GET_BL on %s", socketPath)
+}
+
+// isUnderRuntimeDir reports whether path lives under the uid-private
+// XDG_RUNTIME_DIR. When false the control socket may sit in a world-accessible
+// fallback (e.g. /tmp) and is deliberately not queried, so we never leak a
+// profile's bypass list to another local user via GET_BL.
+func isUnderRuntimeDir(path string) bool {
+	rd := os.Getenv("XDG_RUNTIME_DIR")
+	if rd == "" {
+		return false
+	}
+	rd = strings.TrimSuffix(rd, "/")
+	return path == rd || strings.HasPrefix(path, rd+"/")
 }
 
 // testRawConnectivity пингует внешние хосты через raw TUN интерфейс.

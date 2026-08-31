@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/things-go/go-socks5"
@@ -17,7 +16,6 @@ import (
 )
 
 type WireproxyRunner struct {
-	mu            sync.RWMutex
 	tun           *wireproxy.VirtualTun
 	cancel        context.CancelFunc
 	socksPort     int
@@ -26,25 +24,20 @@ type WireproxyRunner struct {
 	socksBindAddr string
 	config        *wireproxy.Configuration
 	socksListener net.Listener
-	bypassDomains []string
-	bypassIPs     []string
+	router        *Router
 }
 
 // SetBypass updates the bypass lists used by the SOCKS5 dial interceptor at
-// runtime, without restarting the wireproxy SOCKS5 server. Domains are matched
-// by suffix on each new connection; IPs give an exact-match shortcut.
+// runtime, without restarting the wireproxy SOCKS5 server. Lists are handed to
+// the application-level Router, which re-snapshots them on each dial.
 func (w *WireproxyRunner) SetBypass(domains, ips []string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.bypassDomains = domains
-	w.bypassIPs = ips
+	w.router.Update(domains, ips)
 }
 
-// bypassSnapshot returns a consistent copy of the current bypass lists.
-func (w *WireproxyRunner) bypassSnapshot() (domains, ips []string) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.bypassDomains, w.bypassIPs
+// Router exposes the bypass Router so the control socket can serve read-only
+// GET_BL introspection without re-implementing matching logic.
+func (w *WireproxyRunner) Router() *Router {
+	return w.router
 }
 
 func NewWireproxyRunner(socksPort int, socksUser, socksPass, socksBindAddr string, bypassDomains, bypassIPs []string) *WireproxyRunner {
@@ -56,41 +49,24 @@ func NewWireproxyRunner(socksPort int, socksUser, socksPass, socksBindAddr strin
 		socksUser:     socksUser,
 		socksPass:     socksPass,
 		socksBindAddr: socksBindAddr,
-		bypassDomains: bypassDomains,
-		bypassIPs:     bypassIPs,
+		router:        NewRouter(bypassDomains, bypassIPs),
 	}
 }
 
-// shouldBypass returns true if the SOCKS request destination matches
-// a blacklisted domain (FQDN suffix) or a pre-resolved bypass IP.
-func shouldBypass(req *socks5.Request, domains, ips []string) bool {
+// dialHost extracts the host used for bypass matching from a SOCKS5 request.
+// FQDN is preferred (lets the Router suffix-match the original destination);
+// it falls back to the IP literal the server resolved.
+func dialHost(req *socks5.Request) string {
 	if req == nil {
-		return false
+		return ""
 	}
-
 	if req.RawDestAddr != nil && req.RawDestAddr.FQDN != "" {
-		fqdn := strings.ToLower(strings.TrimSuffix(req.RawDestAddr.FQDN, "."))
-		for _, d := range domains {
-			dl := strings.ToLower(strings.TrimSpace(d))
-			if dl == "" {
-				continue
-			}
-			if fqdn == dl || strings.HasSuffix(fqdn, "."+dl) {
-				return true
-			}
-		}
+		return req.RawDestAddr.FQDN
 	}
-
 	if req.DestAddr != nil && len(req.DestAddr.IP) > 0 {
-		ipStr := req.DestAddr.IP.String()
-		for _, ip := range ips {
-			if ip == ipStr {
-				return true
-			}
-		}
+		return req.DestAddr.IP.String()
 	}
-
-	return false
+	return ""
 }
 
 func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
@@ -163,13 +139,14 @@ func (w *WireproxyRunner) Start(ctx context.Context, wgConfig string) error {
 
 			// Always install the bypass-aware dial handler so that hot-reloaded
 			// bypass lists (via SetBypass / bl load) take effect without a
-			// restart. When the lists are empty, shouldBypass returns false and
-			// all traffic flows through the tunnel — same behavior as the
-			// previous plain-dial path.
+			// restart. The application-level Router.Resolve decides direct vs
+			// tunnel per destination (domain suffix / exact IP / CIDR). When
+			// the lists are empty, Resolve returns "tun" and all traffic flows
+			// through the tunnel — same behavior as the previous plain-dial path.
 			directDialer := &net.Dialer{Timeout: 30 * time.Second, Control: nil}
 			options = []socks5.Option{
 				socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, req *socks5.Request) (net.Conn, error) {
-					if bd, bip := w.bypassSnapshot(); shouldBypass(req, bd, bip) {
+					if up, _ := w.router.Resolve(dialHost(req)); up == "direct" {
 						return directDialer.DialContext(ctx, network, addr)
 					}
 					return tun.Tnet.DialContext(ctx, network, addr)

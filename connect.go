@@ -96,6 +96,13 @@ var (
 	daemonProfileName string // daemon profile name for PID/socket files
 )
 
+// cs is the control socket (captcha + BL_RELOAD + GET_BL). It lives in the
+// daemon child process. It is package-level (like activeWireproxy/daemonMode)
+// so tryConnectProfile can attach the socks-mode Router to it for read-only
+// GET_BL introspection by concurrent kernel daemons. nil unless the socket
+// was successfully started.
+var cs *CaptchaSocket
+
 // hasCapNetAdmin reports whether the current process has cap_net_admin in
 // its effective capability set. Root (uid 0) is always considered to have it.
 func hasCapNetAdmin() bool {
@@ -182,20 +189,20 @@ func connectCmd() {
 		positionalDomains = blPositional
 	}
 
- 	if *socksListen != "" && *socksBindAddr {
- 		fmt.Fprintln(os.Stderr, "[ERROR] -listen и -pub/--public несовместимы (взаимоисключающие)")
- 		os.Exit(1)
- 	}
+	if *socksListen != "" && *socksBindAddr {
+		fmt.Fprintln(os.Stderr, "[ERROR] -listen и -pub/--public несовместимы (взаимоисключающие)")
+		os.Exit(1)
+	}
 
- 	if *socksBindAddr && *mode != "socks" {
- 		fmt.Fprintln(os.Stderr, "[ERROR] -pub/--public применяется только с -mode socks")
- 		os.Exit(1)
- 	}
+	if *socksBindAddr && *mode != "socks" {
+		fmt.Fprintln(os.Stderr, "[ERROR] -pub/--public применяется только с -mode socks")
+		os.Exit(1)
+	}
 
- 	if *socksListen != "" && *mode != "socks" {
-  		fmt.Fprintln(os.Stderr, "[ERROR] -listen применяется только с -mode socks")
-  		os.Exit(1)
-  	}
+	if *socksListen != "" && *mode != "socks" {
+		fmt.Fprintln(os.Stderr, "[ERROR] -listen применяется только с -mode socks")
+		os.Exit(1)
+	}
 
 	if *socksListen != "" {
 		if err := validateSocksListenAddr(*socksListen); err != nil {
@@ -513,7 +520,7 @@ func connectCmd() {
 	daemonMode = *mode
 	daemonBlRaw = *blackList
 	daemonProfileName = dm.daemonProfileName()
-	cs := newCaptchaSocket(dm.daemonProfileName())
+	cs = newCaptchaSocket(dm.daemonProfileName())
 	if err := cs.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "[WARNING] Не удалось запустить socket для капчи: %v\n", err)
 	}
@@ -681,9 +688,9 @@ func tryConnectProfile(
 	mode string,
 	socksPort int,
 	socksUser, socksPass string,
- 	pubFlag bool,
- 	socksListenAddr string,
- 	rawPort int,
+	pubFlag bool,
+	socksListenAddr string,
+	rawPort int,
 	transport string,
 	sigCh chan os.Signal,
 	stopCh chan struct{},
@@ -744,16 +751,16 @@ func tryConnectProfile(
 		}
 	}
 
- 	if mode == "socks" {
- 		cfg.Listen = "127.0.0.1:0"
- 		if pubFlag {
- 			cfg.SocksBindAddr = "0.0.0.0"
- 		} else if socksListenAddr != "" {
- 			cfg.SocksBindAddr = socksListenAddr
- 		} else {
- 			cfg.SocksBindAddr = "127.0.0.1"
- 		}
- 	} else if cfg.Listen == "" {
+	if mode == "socks" {
+		cfg.Listen = "127.0.0.1:0"
+		if pubFlag {
+			cfg.SocksBindAddr = "0.0.0.0"
+		} else if socksListenAddr != "" {
+			cfg.SocksBindAddr = socksListenAddr
+		} else {
+			cfg.SocksBindAddr = "127.0.0.1"
+		}
+	} else if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
 
@@ -915,9 +922,17 @@ func tryConnectProfile(
 						fmt.Printf("[WARNING] Не найден default gateway, маршруты к TURN не настроены\n")
 					}
 
+					// Sync bypass domains of already-running socks profiles too,
+					// so their direct (Router-selected) traffic isn't captured by
+					// our 0.0.0.0/1 raw routes. Unconditional for kernel (raw)
+					// profiles — even without own -bl, foreign socks domains must
+					// be routed direct via kernel host-routes.
+					foreignDomains := fetchActiveSocksBypassDomains(daemonProfileName)
+					ownDomains := []string(nil)
 					if splitCfg != nil {
-						addKernelBypassRoutes(splitCfg.domains) // routes tracked in splitRoutes internally
+						ownDomains = splitCfg.domains
 					}
+					addKernelBypassRoutes(mergeBypassDomains(ownDomains, foreignDomains)) // routes tracked in splitRoutes internally
 
 					fmt.Println("[*] Проверка работоспособности туннеля...")
 					time.Sleep(2 * time.Second)
@@ -976,6 +991,7 @@ func tryConnectProfile(
 						}
 						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
 						activeWireproxy.Store(wr)
+						cs.SetRouter(wr.Router()) // enable read-only GET_BL for kernel daemons
 						if splitCfg != nil && len(splitCfg.domains) > 0 {
 							fmt.Printf("[*] Split tunnel (blacklist): %d доменов, %d IP напрямую\n",
 								len(splitCfg.domains), len(bypassIPs))
@@ -1008,6 +1024,24 @@ func tryConnectProfile(
 					} else {
 						turnIPs := c.GetTurnIPs()
 						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
+						// Enrich the bypass list with domains from already-running socks
+						// profiles BEFORE kernel routes are installed, so their
+						// direct (Router-selected) traffic is not captured by our
+						// wg-qwdtt 0.0.0.0/1,128.0.0.0/1 routes. Unconditional for
+						// kernel (tun) profiles — even without own -bl, foreign
+						// socks domains must be routed direct. When splitCfg != nil,
+						// foreign domains merge into splitCfg.domains before
+						// applyWGConfig (which installs routes via addKernelBypassRoutes);
+						// when splitCfg == nil, routes are added separately below.
+						// The original splitCfg.domains are kept in origDomains so
+						// foreign socks domains don't leak into this tunnel profile's
+						// black_list_domains (qwdtt bl list/edit rely on that).
+						foreignDomains := fetchActiveSocksBypassDomains(profileName)
+						var origDomains []string
+						if splitCfg != nil {
+							origDomains = splitCfg.domains
+							splitCfg.domains = mergeBypassDomains(origDomains, foreignDomains)
+						}
 						if err := applyWGConfig(ev.Data, turnIPs, splitCfg); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
 							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
@@ -1017,6 +1051,12 @@ func tryConnectProfile(
 								clearActiveProfile()
 							}
 							return false, false, true
+						}
+						// When splitCfg was nil, applyWGConfig didn't install
+						// foreign-domain routes. Add them now — host routes via
+						// default gateway, more specific than /1 routes.
+						if splitCfg == nil && len(foreignDomains) > 0 {
+							addKernelBypassRoutes(foreignDomains)
 						}
 						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
 
@@ -1036,7 +1076,7 @@ func tryConnectProfile(
 						fmt.Println("[*] Весь трафик теперь идет через VPN")
 
 						if splitCfg != nil {
-							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, splitRoutes)
+							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, origDomains, splitRoutes)
 						}
 
 						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
