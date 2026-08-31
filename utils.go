@@ -263,8 +263,8 @@ type ProfileDetails struct {
 	SocksPort        int      // SOCKS5 port (only relevant for socks mode)
 	SocksUser        string   // SOCKS5 username (if specified via -socks-user)
 	SocksPass        string   // SOCKS5 password (if specified via -socks-password)
- 	SocksPublic      bool     // SOCKS5 listening on 0.0.0.0 (via -pub/--public)
- 	SocksListenAddr   string   // SOCKS5 bind address (via -listen)
+	SocksPublic      bool     // SOCKS5 listening on 0.0.0.0 (via -pub/--public)
+	SocksListenAddr  string   // SOCKS5 bind address (via -listen)
 	PID              int      // Process PID
 	BlackList        string   // raw -bl / --black-list value (space-separated domains)
 	BlackListFile    string   // path to -bl-file / --black-list-file JSON file
@@ -503,11 +503,11 @@ func getRunningProfileDetails() map[string]*ProfileDetails {
 					}
 				}
 				d := &ProfileDetails{
-					Mode:             mode,
-					SocksPort:        socksPort,
-					SocksPublic:      socksPublic,
-					SocksListenAddr:  socksListenAddr,
-					PID:              autoswitchPid,
+					Mode:            mode,
+					SocksPort:       socksPort,
+					SocksPublic:     socksPublic,
+					SocksListenAddr: socksListenAddr,
+					PID:             autoswitchPid,
 				}
 				// Autoswitch does not have its own split-cfg; it lives on the
 				// *current* profile (e.g. qwdtt-tp-s.bl). Mirror the per-profile
@@ -597,21 +597,19 @@ func getCurrentBlFile() string {
 	// Priority: autoswitch current (если tun/raw) -> active_profile (если tun/raw) -> any running tun/raw.
 	if isDaemonRunning("autoswitch") {
 		if cur := getAutoswitchCurrentProfile(); cur != "" {
-			if d, ok := details[cur]; ok && (d.Mode == "tun" || d.Mode == "raw") && d.BlackListFile != "" {
-				return d.BlackListFile
+			if d, ok := details[cur]; ok && (d.Mode == "tun" || d.Mode == "raw") {
+				return d.BlackListFile // may be "" if profile started without -bl-file
 			}
 		}
 	}
 	if active := getActiveProfile(); active != "" && active != "autoswitch" {
-		if d, ok := details[active]; ok && (d.Mode == "tun" || d.Mode == "raw") && d.BlackListFile != "" {
-			return d.BlackListFile
+		if d, ok := details[active]; ok && (d.Mode == "tun" || d.Mode == "raw") {
+			return d.BlackListFile // may be "" if profile started without -bl-file
 		}
 	}
 	for _, d := range details {
 		if d.Mode == "tun" || d.Mode == "raw" {
-			if d.BlackListFile != "" {
-				return d.BlackListFile
-			}
+			return d.BlackListFile // may be "" if profile started without -bl-file
 		}
 	}
 	return ""

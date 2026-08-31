@@ -504,7 +504,7 @@ func reloadSplitRoutes(mode, blRaw, daemonProfile, newFile string) (string, erro
 		// kernel routing table and would be captured by wg-qwdtt. We therefore
 		// also install kernel-level bypass routes via the default gateway.
 		var kernelRoutes []string
-		if isKernelInterfaceActive() {
+		if isKernelInterfaceActive() || rawIfaceActive() {
 			clearKernelBypassRoutes()
 			kernelRoutes = addKernelBypassRoutes(domains)
 		}

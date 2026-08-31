@@ -880,15 +880,15 @@ func showCmd() {
 
 		details := getRunningProfileDetails()
 		if d, ok := details[name]; ok {
- 			fmt.Printf("  Режим: %s\n", d.Mode)
- 			if d.Mode == "socks" {
- 				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
- 				if d.SocksPublic {
- 					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
- 				} else if d.SocksListenAddr != "" {
- 					fmt.Printf("  SOCKS5 прослушивание: %s\n", d.SocksListenAddr)
- 				}
- 			}
+			fmt.Printf("  Режим: %s\n", d.Mode)
+			if d.Mode == "socks" {
+				fmt.Printf("  SOCKS5 порт: %d\n", d.SocksPort)
+				if d.SocksPublic {
+					fmt.Printf("  SOCKS5 прослушивание: 0.0.0.0 (public)\n")
+				} else if d.SocksListenAddr != "" {
+					fmt.Printf("  SOCKS5 прослушивание: %s\n", d.SocksListenAddr)
+				}
+			}
 			fmt.Printf("  PID: %d\n", d.PID)
 		}
 
@@ -1662,7 +1662,7 @@ func disconnectSingleProfile(targetProfile string, runningDetails map[string]*Pr
 		disconnectMode = d.Mode
 	}
 
- 	if !skipKill {
+	if !skipKill {
 		fmt.Printf("[*] Отключение профиля '%s'...\n", targetProfile)
 		if !killByPidFile(targetProfile) {
 			fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
@@ -3025,7 +3025,7 @@ func blCmd() {
 
 		// Случай 2: путь есть, но нет -p → проверяем наличие запущенного TUN/RAW
 		if *profile == "" {
-			if getCurrentBlFile() == "" {
+			if _, _, _, rerr := resolveBlSocket(""); rerr != nil {
 				fmt.Fprintln(os.Stderr, "[ERROR] Нет запущенного профиля TUN/RAW для hot-reload.")
 				fmt.Fprintln(os.Stderr, "Укажите -p/--profile PROFILE или запустите профиль в режиме TUN/RAW.")
 				os.Exit(1)

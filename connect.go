@@ -1004,7 +1004,7 @@ func tryConnectProfile(
 							// instead of being captured by wg-qwdtt's 0.0.0.0/1,
 							// 128.0.0.0/1 routes.
 							var kernelRoutes []string
-							if isKernelInterfaceActive() {
+							if isKernelInterfaceActive() || rawIfaceActive() {
 								kernelRoutes = addKernelBypassRoutes(splitCfg.domains)
 							}
 							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, kernelRoutes)
