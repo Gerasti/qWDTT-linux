@@ -70,6 +70,8 @@ jobs:
           cd artifacts
           cp binary-amd64/qwdtt qwdtt-amd64
           cp binary-arm64/qwdtt qwdtt-arm64
+          cp tarball-amd64/*.tar.gz .
+          cp tarball-arm64/*.tar.gz .
           ls -la *.tar.gz qwdtt-*
 
       - name: Generate checksums
