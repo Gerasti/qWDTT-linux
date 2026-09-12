@@ -128,9 +128,9 @@ uname -m
 ```bash
 # Скачать и распаковать tarball нужной платформы
 # x86_64:
-curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-linux-amd64.tar.gz | tar xz
+curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.5/qwdtt-linux-amd64.tar.gz | tar xz
 # arm64:
-# curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-linux-arm64.tar.gz | tar xz
+# curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.5/qwdtt-linux-arm64.tar.gz | tar xz
 
 # Перейти в каталог
 cd qwdtt-linux-amd64
@@ -153,9 +153,9 @@ sudo setcap cap_net_admin+eip qwdtt
 
 ```bash
 # x86_64:
-curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-amd64
+curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.5/qwdtt-amd64
 # arm64:
-# curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-arm64
+# curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.5/qwdtt-arm64
 
 chmod +x qwdtt
 sudo mv qwdtt /usr/local/bin/

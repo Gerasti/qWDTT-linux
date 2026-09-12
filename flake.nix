@@ -28,7 +28,7 @@
         qwdtt = final.callPackage ({ buildGoModule, lib }:
           buildGoModule {
             pname = "qwdtt";
-            version = "1.1.0";
+            version = "1.1.5";
 
             src = ./.;
             vendorHash = null;
