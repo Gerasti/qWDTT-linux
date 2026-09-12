@@ -18,7 +18,7 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 - import <name> — импорт профилей из JSON или ZIP файлов приложения андроид
 - test --group qubit — автотестирование работы ВСЕХ профилей группы qubit
 - subscription или sub для обновления профилей через HTTPs
-- bl — редактор списка обхода туннеля (bypass routes)
+- bl — редактор списка обхода туннеля (beta bypass routes)
 - Debug режим для мониторинга соединения
 
 ## Установка
@@ -111,22 +111,57 @@ patchelf
 
 ### Скачивание и установка бинарника из Release
 
-```bash
-# Скачать бинарник из Release
-curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt
+Артефакты доступны для платформ:
+- x86_64 (`qwdtt-linux-amd64.tar.gz` или `qwdtt-amd64`)
+- arm64 (`qwdtt-linux-arm64.tar.gz` или `qwdtt-arm64`)
 
-# Указать правильный интерпретатор (glibc) (до v1.0.0) 
-patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 qwdtt
+#### проверка командой
+```
+uname -m
+
+# x86_64  → amd64
+# aarch64 → arm64
+```
+
+**Вариант 1: Tarball (включает bash, fish completions)**
+
+```bash
+# Скачать и распаковать tarball нужной платформы
+# x86_64:
+curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-linux-amd64.tar.gz | tar xz
+# arm64:
+# curl -L https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-linux-arm64.tar.gz | tar xz
+
+# Перейти в каталог
+cd qwdtt-linux-amd64
 
 # Сделать исполняемым
 chmod +x qwdtt
 
 # Опционально: переместить в /usr/local/bin для доступа без полного пути
-# sudo mv qwdtt /usr/local/bin/
+sudo mv qwdtt /usr/local/bin/
+
+# Установить completions (уже внутри tarball, но можно и вручную)
+sudo cp completions/qwdtt.bash /etc/bash_completion.d/qwdtt    # Bash
+# mkdir -p ~/.config/fish/completions && cp completions/qwdtt.fish ~/.config/fish/completions/  # Fish
 
 # Установить capabilities
 sudo setcap cap_net_admin+eip qwdtt
 ```
+
+**Вариант 2: Сырой бинарник**
+
+```bash
+# x86_64:
+curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-amd64
+# arm64:
+# curl -L -o qwdtt https://github.com/Gerasti/qWDTT-linux/releases/download/v1.1.0/qwdtt-arm64
+
+chmod +x qwdtt
+sudo mv qwdtt /usr/local/bin/
+sudo setcap cap_net_admin+eip qwdtt
+```
+
 
 ### Установка автодополнения
 
@@ -140,24 +175,40 @@ cp completions/qwdtt.fish ~/.config/fish/completions/
 
 ### Сборка из исходников
 
-Минимальная версия Go — **1.24**.
+Минимальная версия Go — **1.26**.
 
 ```bash
-# Установить Go (если ещё не установлен)
-wget https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
+### Установить Go (если ещё не установлен)
+# Для x86_64:
+wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+
+# Для arm64 (ARM64):
+wget https://go.dev/dl/go1.26.0.linux-arm64.tar.gz
+
+sudo tar -C /usr/local -xzf go1.26.0.linux-*.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
-# Собрать из исходников
+### Собрать из исходников
 git clone https://github.com/Gerasti/qWDTT-linux
 cd qWDTT-linux
-go build -trimpath -ldflags="-s -w" 
 
-# Опционально: переместить в /usr/local/bin для доступа без полного пути
+# Для x86_64:
+go build -trimpath -ldflags="-s -w"
+
+# Для arm64 (ARM64):
+GOARCH=arm64 go build -trimpath -ldflags="-s -w"
+
+## Опционально: переместить в /usr/local/bin для доступа без полного пути
 # sudo mv qwdtt /usr/local/bin/
 
-# Установить capabilities
+### Установить capabilities
 sudo setcap cap_net_admin+eip qwdtt
+```
+
+**Кросс-сборка для arm64 на x86_64 машине** (зависимости используют cgo):
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w"
 ```
 
 ## Использование

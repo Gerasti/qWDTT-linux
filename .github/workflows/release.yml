@@ -1,0 +1,91 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            tar_suffix: amd64
+          - goarch: arm64
+            tar_suffix: arm64
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} \
+          go build -trimpath -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+          -o qwdtt
+
+      - name: Create tarball
+        run: |
+          mkdir -p "qwdtt-linux-${{ matrix.tar_suffix }}/completions"
+          cp qwdtt "qwdtt-linux-${{ matrix.tar_suffix }}/"
+          cp completions/qwdtt.bash "qwdtt-linux-${{ matrix.tar_suffix }}/completions/"
+          cp completions/qwdtt.fish "qwdtt-linux-${{ matrix.tar_suffix }}/completions/"
+          tar -czf "qwdtt-linux-${{ matrix.tar_suffix }}.tar.gz" \
+            "qwdtt-linux-${{ matrix.tar_suffix }}"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.tar_suffix }}
+          path: "qwdtt-linux-${{ matrix.tar_suffix }}.tar.gz"
+
+      - name: Upload raw binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.tar_suffix }}
+          path: qwdtt
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename raw binaries and verify tarballs
+        run: |
+          cd artifacts
+          cp binary-amd64/qwdtt qwdtt-amd64
+          cp binary-arm64/qwdtt qwdtt-arm64
+          ls -la *.tar.gz qwdtt-*
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz qwdtt-* > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/qwdtt-amd64
+            artifacts/qwdtt-arm64
+            artifacts/checksums.txt
