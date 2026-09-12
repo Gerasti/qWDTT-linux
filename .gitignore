@@ -27,6 +27,13 @@ server
 Thumbs.db
 Desktop.ini
 
+# ===== Vendored dependencies =====
+# The generic 'server' pattern above (line 9) unintentionally ignores
+# vendor/.../internal/server/ — re-include all vendored content
+!vendor/
+!vendor/**/
+!vendor/**/*
+
 # ===== Misc =====
 *.log
 *.tmp
