@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -120,44 +121,103 @@ func profilesInAllSubscriptions() []string {
 }
 
 func fetchSubscriptionJSON(url string) ([]byte, error) {
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return nil, fmt.Errorf("URL должен начинаться с http:// или https://")
+	if !strings.HasPrefix(url, "http://") &&
+		!strings.HasPrefix(url, "https://") {
+		return nil, fmt.Errorf(
+			"URL должен начинаться с http:// или https://",
+		)
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось получить подписку: %w", err)
+		return nil, fmt.Errorf("не удалось создать запрос: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "curl/8.0.0")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"не удалось получить подписку: %w",
+			err,
+		)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("ошибка HTTP %d при получении подписки", resp.StatusCode)
+		return nil, fmt.Errorf(
+			"ошибка HTTP %d при получении подписки",
+			resp.StatusCode,
+		)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := io.ReadAll(
+		io.LimitReader(resp.Body, 2<<20),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать ответ: %w", err)
+		return nil, fmt.Errorf(
+			"не удалось прочитать ответ: %w",
+			err,
+		)
 	}
 
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		return nil, fmt.Errorf("пустой ответ от сервера подписки")
+	// Remove UTF-8 BOM and surrounding whitespace.
+	body = bytes.TrimPrefix(
+		body,
+		[]byte{0xEF, 0xBB, 0xBF},
+	)
+	body = bytes.TrimSpace(body)
+
+	if len(body) == 0 {
+		return nil, fmt.Errorf(
+			"пустой ответ от сервера подписки",
+		)
 	}
 
-	// Base64-декодинг, если ответ не начинается с '{'
-	if strings.HasPrefix(trimmed, "{") {
-		return []byte(trimmed), nil
+	// Return valid JSON directly.
+	if json.Valid(body) {
+		return body, nil
 	}
 
-	decoded, err := base64.StdEncoding.DecodeString(trimmed)
-	if err != nil {
-		decoded, err = base64.URLEncoding.DecodeString(trimmed)
+	// Try Base64 decoding.
+	encodings := []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	}
+
+	for _, encoding := range encodings {
+		decoded, err := encoding.DecodeString(string(body))
 		if err != nil {
-			return nil, fmt.Errorf("ответ не является JSON или Base64: %w", err)
+			continue
+		}
+
+		// Remove BOM and whitespace from decoded JSON.
+		decoded = bytes.TrimPrefix(
+			decoded,
+			[]byte{0xEF, 0xBB, 0xBF},
+		)
+		decoded = bytes.TrimSpace(decoded)
+
+		if json.Valid(decoded) {
+			return decoded, nil
 		}
 	}
-	return decoded, nil
+
+	return nil, fmt.Errorf(
+		"ответ не является JSON или Base64: "+
+			"HTTP %d, Content-Type=%q, размер=%d, первые байты=% x",
+		resp.StatusCode,
+		resp.Header.Get("Content-Type"),
+		len(body),
+		body[:min(len(body), 16)],
+	)
 }
 
 func parseSubscriptionJSON(data []byte) (*SubscriptionJSON, error) {

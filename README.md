@@ -1,4 +1,4 @@
-# qWDTT linux v1.1.5
+# qWDTT linux v1.1.6
 
 CLI VPN клиент для Linux через TURN-серверы VK с WireGuard или Raw.
 
@@ -33,8 +33,8 @@ CLI VPN клиент для Linux через TURN-серверы VK с WireGuard
 ```nix
 { config, lib, pkgs, ... }:
 let
-qwdtt = builtins.getFlake "/etc/qWDTT-linux"; # local path after git clone
-# either with internet https://github.com/Gerasti/qWDTT-linux
+qwdtt = builtins.getFlake "/etc/qWDTT-linux"; # local path after git clone (--impure)
+# or with internet https://github.com/Gerasti/qWDTT-linux
 in
 {
   imports =
@@ -43,6 +43,8 @@ in
   ];
   services.qwdtt = {
     enable = true;
+    #secretsManager = "none" # for own manager or auto, sops-nix, agenix
+    
     # package = pkgs.qwdtt;  # override package if needed
     deviceId = config.sops.secrets.wdtt-id.path; # Device ID for all profiles (path or string)
 

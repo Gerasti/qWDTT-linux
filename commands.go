@@ -852,8 +852,8 @@ func showCmd() {
 		fmt.Printf("  Peer: %s\n", prof.PeerAddr)
 		fmt.Printf("  Password: %s\n", maskPassword(prof.Password))
 		fmt.Printf("  Listen: %s\n", prof.Listen)
-		if prof.TurnHost != "" {
-			fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
+		if len(prof.TurnHosts) > 0 {
+			fmt.Printf("  TURN: %s:%s\n", prof.TurnHosts[0], prof.TurnPort)
 		}
 		if prof.DeviceID != "" {
 			fmt.Printf("  Device ID: %s\n", prof.DeviceID)
@@ -2336,8 +2336,8 @@ func debugCmd() {
 			}
 			fmt.Printf("Конфигурация профиля '%s':\n", e.name)
 			fmt.Printf("  Peer: %s\n", prof.PeerAddr)
-			if prof.TurnHost != "" {
-				fmt.Printf("  TURN: %s:%s\n", prof.TurnHost, prof.TurnPort)
+			if len(prof.TurnHosts) > 0 {
+				fmt.Printf("  TURN: %s:%s\n", prof.TurnHosts[0], prof.TurnPort)
 			}
 			fmt.Printf("  Device ID: %s\n", prof.DeviceID)
 			fmt.Printf("  Priority: %d\n", prof.Priority)

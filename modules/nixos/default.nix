@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  options,
   ...
 }:
 
@@ -12,7 +13,7 @@ let
 
   qwdtt-package = pkgs.buildGoModule {
     pname = "qwdtt";
-    version = "1.1.5";
+    version = "1.1.6";
 
     src = ./../..;
     vendorHash = null;
@@ -28,16 +29,104 @@ let
       cp $src/completions/qwdtt.fish $out/share/fish/vendor_completions.d/qwdtt.fish
     '';
 
-    meta = with lib; {
+    meta = {
       description = "VPN client через TURN-серверы VK";
       license = licenses.mit;
       maintainers = [ ];
     };
   };
+
+  # ---------------------------------------------------------------------------
+  # Helpers
+  # ---------------------------------------------------------------------------
+
+  isRuntimePathStr = v: builtins.isString v && builtins.match "/.*" v != null;
+  isHexId = v: builtins.isString v && builtins.match "[0-9a-fA-F]{16}" v != null;
+  stripNl = replaceStrings [ "\n" "\r" ] [ "" "" ];
+
+  validId = v: v == null || isRuntimePathStr v || builtins.isPath v || isHexId v;
+
+  # -> null | { static = "<16 hex>"; } | { runtime = "/path/to/secret"; }
+  resolveId = v:
+    if v == null then null
+    else if isRuntimePathStr v then { runtime = v; }
+    else if builtins.isPath v then { static = stripNl (builtins.readFile v); }
+    else { static = v; };
+
+  # profile-level deviceId wins over the global one
+  profileDeviceId = p:
+    let own = resolveId p.deviceId;
+    in if own != null then own else resolveId cfg.deviceId;
+
+  # wdtt://IP:DTLS_PORT:PORT2:PORT3:PASSWORD:HASH1,HASH2#Name
+  parseLink = raw:
+    let
+      stripped = replaceStrings [ "wdtt://" "\n" "\r" ] [ "" "" "" ] raw;
+      fields = splitString ":" stripped;
+    in
+    if length fields < 6 then
+      throw "services.qwdtt: a profile `link` is not a valid wdtt:// link (expected at least 6 ':'-separated fields)"
+    else
+      let
+        rest = concatStringsSep ":" (drop 4 fields);
+        beforeName = head (splitString "#" rest);
+        pwParts = splitString ":" beforeName;
+        hashes = filter (h: h != "") (splitString "," (last pwParts));
+        password = concatStringsSep ":" (init pwParts);
+      in
+      {
+        peer = "${elemAt fields 0}:${elemAt fields 1}";
+        inherit password hashes;
+      };
+
+  mkProfileJson = name: p:
+    let
+      id = profileDeviceId p;
+      idAttr = optionalAttrs (id != null && id ? static) { device_id = id.static; };
+      base =
+        if isRuntimePathStr p.link then
+          { link_file = p.link; }
+        else
+          parseLink (if builtins.isPath p.link then builtins.readFile p.link else p.link);
+    in
+    pkgs.writeText "qwdtt-ro-${name}.json" (builtins.toJSON (
+      base // {
+        listen = "127.0.0.1:9000";
+        priority = p.priority;
+      } // idAttr
+    ));
+
+  # ---------------------------------------------------------------------------
+  # Secret manager detection
+  # ---------------------------------------------------------------------------
+
+  usesRuntimeSecrets =
+    isRuntimePathStr cfg.deviceId
+    || any (p: isRuntimePathStr p.link || isRuntimePathStr p.deviceId)
+         (attrValues cfg.profiles);
+
+  sopsActive = options ? sops && (config.sops.secrets or { }) != { };
+  sopsSystemd = sopsActive && (config.sops.useSystemdActivation or false);
+  agenixActive = options ? age && (config.age.secrets or { }) != { };
+
+  detectedManager =
+    if sopsActive then "sops-nix"
+    else if agenixActive then "agenix"
+    else "none";
+
+  manager = if cfg.secretsManager == "auto" then detectedManager else cfg.secretsManager;
+
+  # Only depend on activation scripts that will really exist,
+  # otherwise evaluation fails with "attribute 'setupSecrets' missing".
+  secretDeps =
+    if manager == "sops-nix" then optional (sopsActive && !sopsSystemd) "setupSecrets"
+    else if manager == "agenix" then optional agenixActive "agenixInstall"
+    else [ ];
+
 in
 {
   options.services.qwdtt = {
-    enable = mkEnableOption "PWDTT CLI with capabilities";
+    enable = mkEnableOption "qwdtt CLI with capabilities";
 
     deviceId = mkOption {
       type = types.nullOr (types.either types.str types.path);
@@ -45,7 +134,8 @@ in
       example = "0fd4ffcddb764351";
       description = ''
         Global Device ID (16 hex characters).
-        Can be a string or a path to a file containing the ID.
+        Can be a string, or a path to a file containing the ID
+        (e.g. a sops-nix / agenix secret path).
         If not set, will be generated automatically on first run.
       '';
     };
@@ -56,6 +146,17 @@ in
       defaultText = literalExpression "qwdtt";
       description = ''
         The qwdtt package to use.
+      '';
+    };
+
+    secretsManager = mkOption {
+      type = types.enum [ "auto" "sops-nix" "agenix" "none" ];
+      default = "auto";
+      description = ''
+        Secret manager that provides runtime paths used in `link` / `deviceId`.
+        "auto" prefers sops-nix, then agenix.
+        Use "none" if the files are provisioned by other means
+        (you are then responsible for them existing at activation time).
       '';
     };
 
@@ -120,7 +221,7 @@ in
           deviceId = mkOption {
             type = types.nullOr (types.either types.str types.path);
             default = null;
-            example = "0fd4ffcddb764351";
+            example = "0fd4ffcddb759420";
             description = ''
               Device ID for this specific profile (16 hex characters).
               Can be a string or a path to a file containing the ID.
@@ -129,7 +230,7 @@ in
           };
         };
       });
-      default = {};
+      default = { };
       example = literalExpression ''
         {
           myserver = {
@@ -154,12 +255,12 @@ in
 
     users = mkOption {
       type = types.listOf types.str;
-      default = [];
+      default = [ ];
       example = [ "alice" "bob" ];
       description = ''
         List of users for whom read-only profiles should be created.
-        Profiles will be created in each user's ~/.config/qwdtt/profiles/ directory.
-        If empty, profiles are only created for root.
+        Profiles will be created in each user's ~/.config/qwdtt/ro-profiles/ directory.
+        Profiles are always created for root.
       '';
     };
   };
@@ -167,14 +268,57 @@ in
   config = mkIf cfg.enable {
     assertions = [
       {
-        assertion = cfg.deviceId == null || (
-          builtins.isPath cfg.deviceId ||
-          (builtins.isString cfg.deviceId && (
-            builtins.stringLength cfg.deviceId != 16 ||  # if not 16 chars, assume it's a path
-            builtins.match "[0-9a-fA-F]{16}" cfg.deviceId != null  # if 16 chars, must be hex
-          ))
-        );
-        message = "services.qwdtt.deviceId (when string of 16 chars) must be hex characters (e.g., '0fd4ffcddb764351')";
+        assertion = validId cfg.deviceId;
+        message = "services.qwdtt.deviceId must be 16 hex characters (e.g. '0fd4ffcddb764351') or an absolute path to a file containing it.";
+      }
+      {
+        assertion = all (p: validId p.deviceId) (attrValues cfg.profiles);
+        message = "services.qwdtt.profiles.<name>.deviceId must be 16 hex characters (e.g. '0fd4ffcddb764351') or an absolute path to a file containing it.";
+      }
+      {
+        assertion =
+          !(usesRuntimeSecrets && cfg.secretsManager == "auto" && detectedManager == "none");
+        message = ''
+          services.qwdtt: a `link` or `deviceId` points to a runtime file path
+          (e.g. /run/secrets/...), but no secret manager was detected.
+
+          Pick one of the following:
+
+          # sops-nix (recommended)
+          imports = [ inputs.sops-nix.nixosModules.sops ];
+          sops.defaultSopsFile = ./secrets.yaml;
+          sops.age.keyFile = "/var/lib/sops-nix/key.txt";
+          sops.secrets."qwdtt/myserver-link" = { };
+          sops.secrets."qwdtt/device-id" = { };
+          services.qwdtt.deviceId = config.sops.secrets."qwdtt/device-id".path;
+          services.qwdtt.profiles.myserver.link =
+            config.sops.secrets."qwdtt/myserver-link".path;
+
+          # agenix
+          imports = [ inputs.agenix.nixosModules.default ];
+          age.secrets.qwdtt-link.file = ./secrets/qwdtt-link.age;
+          services.qwdtt.profiles.myserver.link = config.age.secrets.qwdtt-link.path;
+
+          # Files provisioned manually / by another tool (no ordering is guaranteed)
+          services.qwdtt.secretsManager = "none";
+          services.qwdtt.profiles.myserver.link = "/etc/qwdtt/myserver.link";
+
+          # Or avoid secret files: inline the wdtt:// link / 16-hex device id
+          # (it will end up world-readable in the Nix store).
+        '';
+      }
+      {
+        assertion = !(manager == "sops-nix" && sopsSystemd && usesRuntimeSecrets);
+        message = ''
+          services.qwdtt: sops-nix is using systemd activation
+          (sops.useSystemdActivation = true), so the `setupSecrets` activation
+          script does not exist and secrets are not available when qwdtt's
+          activation scripts run.
+
+          Either disable sops.useSystemdActivation, or set
+          services.qwdtt.secretsManager = "none" and make sure the secret
+          files are installed before use.
+        '';
       }
     ];
 
@@ -184,221 +328,110 @@ in
       pkgs.iputils
     ];
 
-system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) {
-      deps = [ "setupSecrets" ];
+    # -------------------------------------------------------------------------
+    # Global device id (root)
+    # -------------------------------------------------------------------------
+    system.activationScripts.qwdtt-device-id = mkIf (cfg.deviceId != null) {
+      deps = secretDeps;
       text =
-        if builtins.isString cfg.deviceId && builtins.stringLength cfg.deviceId == 16
-        then ''
+        let id = resolveId cfg.deviceId;
+        in ''
           mkdir -p /root/.config/qwdtt
-          echo -n "${cfg.deviceId}" > /root/.config/qwdtt/device_id
-          chmod 600 /root/.config/qwdtt/device_id
-        ''
-        else ''
-          mkdir -p /root/.config/qwdtt
-          cat "${toString cfg.deviceId}" > /root/.config/qwdtt/device_id
-          chmod 600 /root/.config/qwdtt/device_id
+          chmod 700 /root/.config/qwdtt
+          ${if id ? static then ''
+            printf '%s' ${escapeShellArg id.static} > /root/.config/qwdtt/device_id
+            chmod 600 /root/.config/qwdtt/device_id
+          '' else ''
+            if [ -r ${escapeShellArg id.runtime} ] && [ -s ${escapeShellArg id.runtime} ]; then
+              tr -d '\n\r' < ${escapeShellArg id.runtime} > /root/.config/qwdtt/device_id
+              chmod 600 /root/.config/qwdtt/device_id
+            else
+              echo "qwdtt: ERROR: device id file ${id.runtime} is missing or empty, device_id not written" >&2
+            fi
+          ''}
         '';
     };
-    
-system.activationScripts.qwdtt-ro-profiles = mkIf (cfg.profiles != {}) {
-      deps = [ "setupSecrets" ];
-      text = let
-        currentProfiles = mapAttrsToList (name: profile: "ro-${name}") cfg.profiles;
-        currentProfilesStr = toString currentProfiles;
-      in ''
-        # Function to clean up stale ro-profiles not in current config
-        clean_stale_ro_profiles() {
-          local dir="$1"
-          [ -d "$dir" ] || return 0
-          for prof in "$dir"/ro-*.json; do
-            [ -f "$prof" ] || continue
-            local profname
-            profname=$(basename "$prof" .json)
-            local keep=0
-            for keep_name in ${currentProfilesStr}; do
-              if [ "$profname" = "$keep_name" ]; then
-                keep=1
-                break
-              fi
-            done
-            if [ "$keep" -eq 0 ]; then
-              rm -f "$prof"
-            fi
-          done
-        }
 
-        # Clean up stale ro-profiles for root
-        clean_stale_ro_profiles "/root/.config/qwdtt/ro-profiles"
+    # -------------------------------------------------------------------------
+    # Read-only profiles (root + cfg.users)
+    # -------------------------------------------------------------------------
+    system.activationScripts.qwdtt-ro-profiles = mkIf (cfg.profiles != { }) {
+      deps = secretDeps;
+      text =
+        let
+          keepNames = mapAttrsToList (name: _: "ro-${name}") cfg.profiles;
 
-        # Clean up stale ro-profiles for each user
-        ${concatStringsSep "\n" (map (user: ''
-          USER_HOME=$(getent passwd ${user} | cut -d: -f6)
-          if [ -n "$USER_HOME" ]; then
-            clean_stale_ro_profiles "$USER_HOME/.config/qwdtt/ro-profiles"
-          fi
-        '') cfg.users)}
-
-        # Create profiles for root
-        mkdir -p /root/.config/qwdtt/ro-profiles
-        chmod 700 /root/.config/qwdtt
-        chmod 700 /root/.config/qwdtt/ro-profiles
-
-        ${concatStringsSep "\n" (mapAttrsToList (name: profile:
-          let
-            profileName = "ro-${name}";
-
-            isRuntimePath = builtins.isString profile.link &&
-                          builtins.match "^/.*" profile.link != null;
-
-            resolvedDeviceId =
-              let
-                resolve = v:
-                  if v == null then { kind = "none"; }
-                  else if builtins.isString v && builtins.match "^/.*" v != null
-                  then { kind = "runtime"; path = v; }
-                  else if builtins.isString v && builtins.stringLength v == 16
-                  then { kind = "static"; value = v; }
-                  else if builtins.isPath v
-                  then { kind = "static"; value = builtins.replaceStrings ["\n" "\r"] ["" ""] (builtins.readFile v); }
-                  else { kind = "none"; };
-                fromProfile = resolve profile.deviceId;
-                fromGlobal  = resolve cfg.deviceId;
-              in
-                if fromProfile.kind != "none" then fromProfile else fromGlobal;
-
-            deviceIdValue = if resolvedDeviceId.kind == "static" then resolvedDeviceId.value else "";
-            deviceIdPath  = if resolvedDeviceId.kind == "runtime" then resolvedDeviceId.path else "";
-
-            injectDeviceId = jsonPath: optionalString (deviceIdPath != "") ''
-              if [ -r "${deviceIdPath}" ]; then
-                DEVICE_ID_VALUE="$(tr -d '\n\r' < "${deviceIdPath}")"
-                if [ -z "$DEVICE_ID_VALUE" ]; then
-                  echo "qwdtt: ERROR: device id secret ${deviceIdPath} is empty for profile ${profileName}" >&2
-                  exit 1
-                fi
-                ${pkgs.jq}/bin/jq --arg id "$DEVICE_ID_VALUE" '. + {device_id: $id}' \
-                  "${jsonPath}" > "${jsonPath}.tmp"
-                mv "${jsonPath}.tmp" "${jsonPath}"
-                chmod 400 "${jsonPath}"
-              else
-                echo "qwdtt: ERROR: device id secret ${deviceIdPath} not readable, profile ${profileName} would silently get a different device id" >&2
-                exit 1
-              fi
-            '';
-
-          in
-          # For runtime paths, store link_file; for static paths, parse and store values
-          if isRuntimePath then ''
-            # Create profile ${profileName} with link_file (runtime secret)
-            mkdir -p /root/.config/qwdtt/ro-profiles
-            cat > /root/.config/qwdtt/ro-profiles/${profileName}.json <<'NIXEOF'
-{
-  "listen": "127.0.0.1:9000",
-  "link_file": "${profile.link}",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-            chmod 400 /root/.config/qwdtt/ro-profiles/${profileName}.json
-            ${injectDeviceId "/root/.config/qwdtt/ro-profiles/${profileName}.json"}
-
-            ${concatStringsSep "\n" (map (user: ''
-              USER_HOME=$(getent passwd ${user} | cut -d: -f6)
-              if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
-                mkdir -p "$USER_HOME/.config/qwdtt/ro-profiles"
-                chmod 700 "$USER_HOME/.config/qwdtt"
-                chmod 700 "$USER_HOME/.config/qwdtt/ro-profiles"
-                cat > "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json" <<'NIXEOF'
-{
-  "listen": "127.0.0.1:9000",
-  "link_file": "${profile.link}",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                chmod 400 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                ${injectDeviceId ''"$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"''}
-                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
-                chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
-              fi
-            '') cfg.users)}
-          '' else
+          profileCalls = concatStringsSep "\n" (mapAttrsToList (name: p:
             let
-              linkContent = if builtins.isPath profile.link
-                           then builtins.readFile profile.link
-                           else if builtins.isString profile.link && builtins.match "^/.*" profile.link != null
-                           then builtins.readFile profile.link
-                           else profile.link;
-
-              stripped = builtins.replaceStrings ["wdtt://"] [""] linkContent;
-              parts = builtins.split ":" stripped;
-              ip = builtins.elemAt parts 0;
-              dtlsPort = builtins.elemAt parts 2;
-
-              tailParts = builtins.genList (i: builtins.elemAt parts (8 + i * 2))
-                                           ((builtins.length parts - 8) / 2);
-              tail = builtins.concatStringsSep ":" tailParts;
-              passwordHashesFull = builtins.head (builtins.split "#" tail);
-              passwordHashesParts = builtins.split ":" passwordHashesFull;
-              passwordParts = builtins.filter builtins.isString passwordHashesParts;
-
-              hashesList = if builtins.length passwordParts > 0
-                          then builtins.elemAt passwordParts (builtins.length passwordParts - 1)
-                          else "";
-              password = if builtins.length passwordParts > 1
-                        then builtins.concatStringsSep ":" (builtins.genList (i: builtins.elemAt passwordParts i) (builtins.length passwordParts - 1))
-                        else "";
-
-              hashesArray = if hashesList != ""
-                           then builtins.fromJSON (builtins.toJSON (builtins.split "," hashesList))
-                           else [];
-              hashesFiltered = builtins.filter builtins.isString hashesArray;
-              hashesJson = builtins.toJSON hashesFiltered;
+              id = profileDeviceId p;
+              idFile = if id != null && id ? runtime then id.runtime else "";
             in ''
-              # Create profile ${profileName} with parsed values (static content)
-              mkdir -p /root/.config/qwdtt/ro-profiles
-              cat > /root/.config/qwdtt/ro-profiles/${profileName}.json <<'NIXEOF'
-{
-  "peer": "${ip}:${dtlsPort}",
-  "password": "${password}",
-  "hashes": ${hashesJson},
-  "listen": "127.0.0.1:9000",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-              chmod 400 /root/.config/qwdtt/ro-profiles/${profileName}.json
-              ${injectDeviceId "/root/.config/qwdtt/ro-profiles/${profileName}.json"}
-
-              ${concatStringsSep "\n" (map (user: ''
-                USER_HOME=$(getent passwd ${user} | cut -d: -f6)
-                if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
-                  mkdir -p "$USER_HOME/.config/qwdtt/ro-profiles"
-                  chmod 700 "$USER_HOME/.config/qwdtt"
-                  chmod 700 "$USER_HOME/.config/qwdtt/ro-profiles"
-                  cat > "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json" <<'NIXEOF'
-{
-  "peer": "${ip}:${dtlsPort}",
-  "password": "${password}",
-  "hashes": ${hashesJson},
-  "listen": "127.0.0.1:9000",
-  ${if deviceIdValue != "" then ''"device_id": "${deviceIdValue}",'' else ""}
-  "priority": ${toString profile.priority}
-}
-NIXEOF
-                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                  chmod 400 "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                  ${injectDeviceId ''"$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"''}
-                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles/${profileName}.json"
-                  chown ${user}: "$USER_HOME/.config/qwdtt/ro-profiles" 2>/dev/null || true
-                  chown ${user}: "$USER_HOME/.config/qwdtt" 2>/dev/null || true
-                fi
-              '') cfg.users)}
+              install_ro_profile "$home" "$user" ${escapeShellArg "ro-${name}"} ${mkProfileJson name p} ${escapeShellArg idFile}
             ''
-        ) cfg.profiles)}
-      '';
+          ) cfg.profiles);
+        in ''
+          keep_profiles=${escapeShellArg (toString keepNames)}
+
+          # Remove ro-* profiles that are no longer in the configuration
+          clean_stale_ro_profiles() {
+            local dir="$1" prof name keep k
+            [ -d "$dir" ] || return 0
+            for prof in "$dir"/ro-*.json; do
+              [ -f "$prof" ] || continue
+              name="$(basename "$prof" .json)"
+              keep=0
+              for k in $keep_profiles; do
+                if [ "$name" = "$k" ]; then keep=1; break; fi
+              done
+              if [ "$keep" -eq 0 ]; then rm -f "$prof"; fi
+            done
+          }
+
+          # install_ro_profile HOME USER NAME SRC_JSON DEVICE_ID_FILE
+          # A missing/empty device id secret skips ONLY this profile (it never
+          # aborts activation), so the profile can't silently get another id.
+          install_ro_profile() {
+            local home="$1" user="$2" name="$3" src="$4" idfile="$5"
+            local cfgdir="$home/.config/qwdtt"
+            local dir="$cfgdir/ro-profiles"
+            local dst="$dir/$name.json"
+            local id_value
+
+            if [ ! -d "$home/.config" ]; then
+              mkdir -p "$home/.config"
+              chown "$user": "$home/.config"
+            fi
+            mkdir -p "$dir"
+            chmod 700 "$cfgdir" "$dir"
+            rm -f "$dst"
+
+            if [ -n "$idfile" ]; then
+              if [ -r "$idfile" ] && id_value="$(tr -d '\n\r' < "$idfile")" && [ -n "$id_value" ]; then
+                ${pkgs.jq}/bin/jq --arg id "$id_value" '. + {device_id: $id}' "$src" > "$dst"
+              else
+                echo "qwdtt: ERROR: device id file $idfile is missing or empty, skipping profile $name for $user" >&2
+                rm -f "$dst"
+                return 0
+              fi
+            else
+              cat "$src" > "$dst"
+            fi
+
+            chmod 400 "$dst"
+            chown "$user": "$dst" "$dir" "$cfgdir"
+          }
+
+          for user in root ${escapeShellArgs cfg.users}; do
+            home="$(${pkgs.getent}/bin/getent passwd "$user" | cut -d: -f6)"
+            if [ -z "$home" ] || [ ! -d "$home" ]; then
+              continue
+            fi
+
+            clean_stale_ro_profiles "$home/.config/qwdtt/ro-profiles"
+
+            ${profileCalls}
+          done
+        '';
     };
 
     security.wrappers = mkIf cfg.wrappers.enable {

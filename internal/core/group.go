@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-
 const workersPerGroup = 9
 
 // allocateGateInterval — минимальный интервал между TURN Allocate по всей
@@ -214,91 +213,91 @@ func WorkerGroup(
 				credsSnapshot.TurnURLs = cloneStringSlice(creds.TurnURLs)
 				credsMu.RUnlock()
 
-			configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
-				getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
+				configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
+					getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
 
-			if getConf {
-				if configDelivered {
-					atomic.StoreInt32(&configSent, 1)
-				} else {
-					atomic.StoreInt32(&configRequestInFlight, 0)
+				if getConf {
+					if configDelivered {
+						atomic.StoreInt32(&configSent, 1)
+					} else {
+						atomic.StoreInt32(&configRequestInFlight, 0)
+					}
 				}
-			}
 
-			isTurnQuota := false
-			fastRetry := false
-			if sessErr != nil {
+				isTurnQuota := false
+				fastRetry := false
+				if sessErr != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					errStr := sessErr.Error()
+					errStrLower := strings.ToLower(errStr)
+					fastRetry = strings.Contains(errStrLower, "broken pipe") ||
+						strings.Contains(errStrLower, "connection reset by peer") ||
+						strings.Contains(errStrLower, "unexpected eof")
+
+					turnAllocAttrMissing := strings.Contains(errStrLower, "turn allocate") &&
+						strings.Contains(errStrLower, "attribute not found")
+					isTurnQuota = strings.Contains(errStrLower, "quota") || strings.Contains(errStr, "486")
+					turnCredRefreshNeeded := !isTurnQuota && (turnAllocAttrMissing ||
+						strings.Contains(errStrLower, "turn allocate auth") ||
+						strings.Contains(errStrLower, "invalid credential") ||
+						strings.Contains(errStrLower, "stale nonce") ||
+						strings.Contains(errStrLower, "allocation mismatch") ||
+						strings.Contains(errStrLower, "error 508"))
+
+					if hint := workerErrorHint(sessErr); hint != "" {
+						errStr += " | " + hint
+					} else if strings.Contains(errStrLower, "rate limit") ||
+						strings.Contains(errStrLower, "flood control") ||
+						strings.Contains(errStrLower, "ip mismatch") ||
+						strings.Contains(errStrLower, "error 29") {
+						errStr += " (ошибка со стороны ВК)"
+					}
+
+					if strings.Contains(errStr, "хеш мёртв") ||
+						strings.Contains(errStr, "FATAL_AUTH") {
+						log.Printf("[ВОРКЕР #%d] Фатальная ошибка: %s", wid, errStr)
+						return
+					}
+
+					attempt++
+					if isTurnQuota {
+						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
+					} else if turnAllocAttrMissing {
+						log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
+						refreshCreds("TURN Allocate attribute-not-found")
+					} else if turnCredRefreshNeeded {
+						log.Printf("[ВОРКЕР #%d] [TURN] Ошибка allocation/кредов, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
+						refreshCreds("TURN allocation error")
+					} else {
+						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
+					}
+
+					isStunDeath := strings.Contains(errStrLower, "error 29") ||
+						strings.Contains(errStrLower, "cannot create socket")
+
+					if isStunDeath {
+						log.Printf("[ВОРКЕР #%d] Невосстановимая TURN/STUN ошибка, завершение: %s", wid, errStr)
+						return
+					}
+				}
+
 				if ctx.Err() != nil {
 					return
 				}
-				errStr := sessErr.Error()
-				errStrLower := strings.ToLower(errStr)
-				fastRetry = strings.Contains(errStrLower, "broken pipe") ||
-					strings.Contains(errStrLower, "connection reset by peer") ||
-					strings.Contains(errStrLower, "unexpected eof")
 
-				turnAllocAttrMissing := strings.Contains(errStrLower, "turn allocate") &&
-					strings.Contains(errStrLower, "attribute not found")
-				isTurnQuota = strings.Contains(errStrLower, "quota") || strings.Contains(errStr, "486")
-				turnCredRefreshNeeded := !isTurnQuota && (turnAllocAttrMissing ||
-					strings.Contains(errStrLower, "turn allocate auth") ||
-					strings.Contains(errStrLower, "invalid credential") ||
-					strings.Contains(errStrLower, "stale nonce") ||
-					strings.Contains(errStrLower, "allocation mismatch") ||
-					strings.Contains(errStrLower, "error 508"))
-
-				if hint := workerErrorHint(sessErr); hint != "" {
-					errStr += " | " + hint
-				} else if strings.Contains(errStrLower, "rate limit") ||
-					strings.Contains(errStrLower, "flood control") ||
-					strings.Contains(errStrLower, "ip mismatch") ||
-					strings.Contains(errStrLower, "error 29") {
-					errStr += " (ошибка со стороны ВК)"
+				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
+				if sessErr != nil && isTurnQuota {
+					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+				} else if fastRetry {
+					retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
 				}
-
-				if strings.Contains(errStr, "хеш мёртв") ||
-					strings.Contains(errStr, "FATAL_AUTH") {
-					log.Printf("[ВОРКЕР #%d] Фатальная ошибка: %s", wid, errStr)
+				select {
+				case <-time.After(retryDelay):
+				case <-ctx.Done():
 					return
 				}
-
-				attempt++
-				if isTurnQuota {
-					log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
-				} else if turnAllocAttrMissing {
-					log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
-					refreshCreds("TURN Allocate attribute-not-found")
-				} else if turnCredRefreshNeeded {
-					log.Printf("[ВОРКЕР #%d] [TURN] Ошибка allocation/кредов, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
-					refreshCreds("TURN allocation error")
-				} else {
-					log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
-				}
-
-				isStunDeath := strings.Contains(errStrLower, "error 29") ||
-					strings.Contains(errStrLower, "cannot create socket")
-
-				if isStunDeath {
-					log.Printf("[ВОРКЕР #%d] Невосстановимая TURN/STUN ошибка, завершение: %s", wid, errStr)
-					return
-				}
-			}
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
-			if sessErr != nil && isTurnQuota {
-				retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
-			} else if fastRetry {
-				retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
-			}
-			select {
-			case <-time.After(retryDelay):
-			case <-ctx.Done():
-				return
-			}
 			}
 		}(wid, workerDelay)
 	}
@@ -347,10 +346,10 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host    string
-	Port    string
-	Hashes  []string
-	WrapKey []byte // Password-derived WRAP key (32 bytes), nil = disabled
+	Hosts    []string
+	Port     string
+	Hashes   []string
+	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
 	ObfsMode string // "audio" or "video" — RTP masking mode
 	// NoDTLS: пропустить DTLS и идти RTP-obfs AEAD напрямую поверх TURN relay.
 	// Требует сервер с -listen-direct. Требует useWrap (WrapKey).
@@ -372,7 +371,3 @@ type Credentials struct {
 	TurnURLs      []string
 	CacheStreamID int
 }
-
-
-
-

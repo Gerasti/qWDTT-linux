@@ -19,7 +19,7 @@ type Config struct {
 	Password      string
 	Hashes        []string
 	Listen        string
-	TurnHost      string
+	TurnHosts     []string
 	TurnPort      string
 	DeviceID      string
 	Workers       int
@@ -217,7 +217,7 @@ func (c *Core) Start() (<-chan Event, error) {
 	n = (n / workersPerGroup) * workersPerGroup
 
 	tp := &TurnParams{
-		Host:      c.cfg.TurnHost,
+		Hosts:     c.cfg.TurnHosts,
 		Port:      c.cfg.TurnPort,
 		Hashes:    c.cfg.Hashes,
 		WrapKey:   wrapKey,

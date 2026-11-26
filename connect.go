@@ -136,14 +136,16 @@ func checkTunRawCapabilities(mode string) {
 	if hasCapNetAdmin() {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "[ERROR] для режима "+mode+" требуется cap_net_admin, а текущий процесс его не имеет.")
-	fmt.Fprintln(os.Stderr, "'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
-	fmt.Fprintln(os.Stderr, "или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
-	fmt.Fprintln(os.Stderr, "P.S. --mode socks не требует ни root, ни cap_net_admin+eip")
+	log.Println("[ERROR] для режима " + mode + " требуется cap_net_admin, а текущий процесс его не имеет.")
+	log.Println("'sudo setcap cap_net_admin+eip qwdtt' бинарнику")
+	log.Println("или для NixOS включите 'services.qwdtt.wrappers.enable = true;' (security wrapper с cap_net_admin) с импортом модуля как в README.md")
+	log.Println("P.S. --mode socks не требует ни root, ни cap_net_admin+eip")
 	os.Exit(1)
 }
 
 func connectCmd() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
 	var profileName string
 	var positionalDomains []string
 
@@ -190,30 +192,26 @@ func connectCmd() {
 	}
 
 	if *socksListen != "" && *socksBindAddr {
-		fmt.Fprintln(os.Stderr, "[ERROR] -listen и -pub/--public несовместимы (взаимоисключающие)")
-		os.Exit(1)
+		log.Fatal("[ERROR] -listen и -pub/--public несовместимы (взаимоисключающие)")
 	}
 
 	if *socksBindAddr && *mode != "socks" {
-		fmt.Fprintln(os.Stderr, "[ERROR] -pub/--public применяется только с -mode socks")
-		os.Exit(1)
+		log.Fatal("[ERROR] -pub/--public применяется только с -mode socks")
 	}
 
 	if *socksListen != "" && *mode != "socks" {
-		fmt.Fprintln(os.Stderr, "[ERROR] -listen применяется только с -mode socks")
-		os.Exit(1)
+		log.Fatal("[ERROR] -listen применяется только с -mode socks")
 	}
 
 	if *socksListen != "" {
 		if err := validateSocksListenAddr(*socksListen); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] -listen: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("[ERROR] -listen: %v", err)
 		}
 	}
 
 	if *mode == "socks" && (*socksBindAddr || isPublicSocksBind(*socksListen)) {
 		if *socksUser == "" || *socksPass == "" {
-			fmt.Fprintln(os.Stderr, "[WARNING] При публичном SOCKS5 (--pub/--public/--listen не на loopback) рекомендуется указать и -socks-user, и -socks-password для аутентификации (иначе доступ без пароля будет открыт извне)")
+			log.Printf("[WARNING] При публичном SOCKS5 (--pub/--public/--listen не на loopback) рекомендуется указать и -socks-user, и -socks-password для аутентификации (иначе доступ без пароля будет открыт извне)")
 		}
 	}
 
@@ -229,8 +227,7 @@ func connectCmd() {
 	var splitCfg *splitTunnelConfig
 	if *blackList != "" || *blackListFile != "" || len(positionalDomains) > 0 {
 		if *mode != "tun" && *mode != "raw" && *mode != "socks" {
-			fmt.Fprintln(os.Stderr, "[ERROR] Split tunneling доступен только в режимах -mode tun, -mode raw или -mode socks")
-			os.Exit(1)
+			log.Fatal("[ERROR] Split tunneling доступен только в режимах -mode tun, -mode raw или -mode socks")
 		}
 		if *blackListFile != "" {
 			if !filepath.IsAbs(*blackListFile) {
@@ -265,8 +262,7 @@ func connectCmd() {
 		if *blackListFile != "" {
 			fileDomains, err := loadBypassRoutesFile(*blackListFile)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
-				os.Exit(1)
+				log.Fatalf("[ERROR] %v", err)
 			}
 			blDomains = append(blDomains, fileDomains...)
 		}
@@ -276,8 +272,7 @@ func connectCmd() {
 	// Validate profile exists before daemonizing so we can report errors cleanly
 	if !*autoSwitch {
 		if _, err := loadProfile(daemonProfile); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Профиль '%s' не найден: %v\n", daemonProfile, err)
-			os.Exit(1)
+			log.Fatalf("[ERROR] Профиль '%s' не найден: %v", daemonProfile, err)
 		}
 	}
 
@@ -288,7 +283,7 @@ func connectCmd() {
 	// and exit (don't connect). If not running, fall through to normal connect.
 	if *autoStop {
 		if *autoSwitch && isDaemonRunning("autoswitch") {
-			fmt.Printf("[*] Остановка авто-переключения...\n")
+			log.Printf("[*] Остановка авто-переключения...")
 			if !killByPidFile("autoswitch") {
 				killByPgrep("autoswitch")
 			}
@@ -303,18 +298,18 @@ func connectCmd() {
 			}
 			if isKernelInterfaceActive() {
 				if err := teardownWG(); err == nil {
-					fmt.Println("[OK] WireGuard конфиг удален")
+					log.Println("[OK] WireGuard конфиг удален")
 				}
 			}
 			if cur := getAutoswitchCurrentProfile(); cur != "" {
 				removeSplitCfg(cur)
 			}
-			fmt.Println("[OK] Авто-переключение остановлено")
+			log.Println("[OK] Авто-переключение остановлено")
 			os.Exit(0)
 		} else if !*autoSwitch && isDaemonRunning(daemonProfile) {
-			fmt.Printf("[*] Остановка профиля '%s'...\n", daemonProfile)
+			log.Printf("[*] Остановка профиля '%s'...", daemonProfile)
 			if !killByPidFile(daemonProfile) {
-				fmt.Printf("[*] Pid файл не найден, fallback на pgrep...\n")
+				log.Printf("[*] Pid файл не найден, fallback на pgrep...")
 				killByPgrep(daemonProfile)
 			}
 			removeSplitCfg(daemonProfile)
@@ -322,15 +317,15 @@ func connectCmd() {
 			if activeProfile == daemonProfile {
 				if *mode != "raw" {
 					if err := teardownWG(); err == nil {
-						fmt.Println("[OK] WireGuard конфиг удален")
+						log.Println("[OK] WireGuard конфиг удален")
 					}
 				} else {
-					fmt.Println("[OK] Raw TUN очищен")
+					log.Println("[OK] Raw TUN очищен")
 				}
 				clearActiveProfile()
 			}
 			notifyDisconnectedSync(daemonProfile, *mode)
-			fmt.Printf("[OK] Профиль '%s' остановлен\n", daemonProfile)
+			log.Printf("[OK] Профиль '%s' остановлен", daemonProfile)
 			os.Exit(0)
 		}
 	}
@@ -339,7 +334,7 @@ func connectCmd() {
 		// Check if autoswitch daemon is already running
 		if isDaemonRunning("autoswitch") {
 			msg := "Авто-переключение уже запущено (PID file: qwdtt-autoswitch.pid). Используйте qwdtt discon для остановки."
-			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			log.Printf("[ERROR] %s", msg)
 			notifyError("autoswitch", msg)
 			os.Exit(1)
 		}
@@ -350,7 +345,7 @@ func connectCmd() {
 				target = "другой процесс"
 			}
 			msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется (профиль: %s). Используйте qwdtt discon для остановки.", target)
-			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			log.Printf("[ERROR] %s", msg)
 			notifyError("autoswitch", msg)
 			os.Exit(1)
 		}
@@ -361,7 +356,7 @@ func connectCmd() {
 				target = "другой процесс"
 			}
 			msg := fmt.Sprintf("Интерфейс %s уже используется в raw-режиме (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
-			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			log.Printf("[ERROR] %s", msg)
 			notifyError("autoswitch", msg)
 			os.Exit(1)
 		}
@@ -369,7 +364,7 @@ func connectCmd() {
 		// Single profile mode: check for conflicts
 		if isDaemonRunning(daemonProfile) {
 			msg := fmt.Sprintf("Профиль '%s' уже запущен (PID file: qwdtt-%s.pid). Используйте qwdtt discon %s для остановки.", daemonProfile, daemonProfile, daemonProfile)
-			fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+			log.Printf("[ERROR] %s", msg)
 			notifyError(profileName, msg)
 			os.Exit(1)
 		}
@@ -382,7 +377,7 @@ func connectCmd() {
 				autoswitchMode := getAutoswitchMode()
 				if autoswitchMode == "tun" || autoswitchMode == "raw" {
 					msg := fmt.Sprintf("Уже запущено авто-переключение в режиме %s. Используйте qwdtt discon для остановки.", autoswitchMode)
-					fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+					log.Printf("[ERROR] %s", msg)
 					notifyError(profileName, msg)
 					os.Exit(1)
 				}
@@ -394,7 +389,7 @@ func connectCmd() {
 					target = "другой процесс"
 				}
 				msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется (профиль: %s). Используйте qwdtt discon для остановки.", target)
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				log.Printf("[ERROR] %s", msg)
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
@@ -405,7 +400,7 @@ func connectCmd() {
 					target = "другой процесс"
 				}
 				msg := fmt.Sprintf("Интерфейс %s уже используется в raw-режиме (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				log.Printf("[ERROR] %s", msg)
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
@@ -417,7 +412,7 @@ func connectCmd() {
 					target = "другой процесс"
 				}
 				msg := fmt.Sprintf("Интерфейс %s уже используется (профиль: %s). Используйте qwdtt discon для остановки.", core.RawIfaceName, target)
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				log.Printf("[ERROR] %s", msg)
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
@@ -428,7 +423,7 @@ func connectCmd() {
 					target = "другой процесс"
 				}
 				msg := fmt.Sprintf("Интерфейс wg-qwdtt уже используется в tun-режиме (профиль: %s). Используйте qwdtt discon для остановки.", target)
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				log.Printf("[ERROR] %s", msg)
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
@@ -438,7 +433,7 @@ func connectCmd() {
 			// as each socks instance uses a unique DTLS port (Listen=127.0.0.1:0, different from tun's 9000).
 			if isSocksPortInUse(*socksPort) {
 				msg := fmt.Sprintf("Порт SOCKS5 %d уже используется другим соединением. Укажите другой порт через -socks-port PORT.", *socksPort)
-				fmt.Fprintln(os.Stderr, "[ERROR] "+msg)
+				log.Printf("[ERROR] %s", msg)
 				notifyError(profileName, msg)
 				os.Exit(1)
 			}
@@ -467,22 +462,22 @@ func connectCmd() {
 		}
 		sockErr := waitForSocket(sockPath, sockTimeout)
 		if sockErr != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] Демон запущен, но сокет недоступен: %v\n", sockErr)
+			log.Printf("[WARNING] Демон запущен, но сокет недоступен: %v", sockErr)
 		}
 
 		stopCh := make(chan struct{})
 		defer close(stopCh)
 		go forwardStdinToSocket(sockPath, stopCh)
 
-		fmt.Printf("[*] Подключение к профилю '%s' запущено в фоновом режиме (PID file: %s)\n", daemonProfile, pidFilePath(dm.daemonProfileName()))
+		log.Printf("[*] Подключение к профилю '%s' запущено в фоновом режиме (PID file: %s)", daemonProfile, pidFilePath(dm.daemonProfileName()))
 
 		if *logFlag {
-			fmt.Println("[*] Вывод лога в реальном времени (Ctrl+C для выхода)")
+			log.Println("[*] Вывод лога в реальном времени (Ctrl+C для выхода)")
 			go tailLogFile(logFile)
 			termCh := make(chan os.Signal, 1)
 			signal.Notify(termCh, syscall.SIGINT, syscall.SIGTERM)
 			<-termCh
-			fmt.Println("\n[*] Остановка...")
+			log.Println("\n[*] Остановка...")
 		}
 
 		return
@@ -497,17 +492,17 @@ func connectCmd() {
 	sw := newSwitchProfileSignal()
 	go func() {
 		for sig := range sigCh {
-			fmt.Printf("\n[*] Получен сигнал: %s\n", sig)
+			log.Printf("\n[*] Получен сигнал: %s", sig)
 			switch sig {
 			case syscall.SIGUSR1:
 				if *autoSwitch {
-					fmt.Println("[*] Переключение на следующий профиль...")
+					log.Println("[*] Переключение на следующий профиль...")
 					sw.trigger()
 				} else {
-					fmt.Println("[*] Перезагрузка конфигурации...")
+					log.Println("[*] Перезагрузка конфигурации...")
 				}
 			case syscall.SIGUSR2:
-				fmt.Println("[*] Переключение уровня логирования...")
+				log.Println("[*] Переключение уровня логирования...")
 			default:
 				close(stopCh)
 				close(done)
@@ -522,7 +517,7 @@ func connectCmd() {
 	daemonProfileName = dm.daemonProfileName()
 	cs = newCaptchaSocket(dm.daemonProfileName())
 	if err := cs.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "[WARNING] Не удалось запустить socket для капчи: %v\n", err)
+		log.Printf("[WARNING] Не удалось запустить socket для капчи: %v", err)
 	}
 	defer cs.Stop()
 	defer dm.Release()
@@ -540,14 +535,14 @@ func connectCmd() {
 	// tun-mode profile (if any) without being overridden by socks processes.
 	if *autoSwitch {
 		if err := setActiveProfile("autoswitch"); err != nil {
-			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+			log.Printf("[WARNING] Не удалось сохранить активный профиль: %v", err)
 		}
 		defer func() {
 			clearAutoswitchCurrentProfile()
 		}()
 	} else if *mode == "tun" || *mode == "raw" {
 		if err := setActiveProfile(profileName); err != nil {
-			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+			log.Printf("[WARNING] Не удалось сохранить активный профиль: %v", err)
 		}
 	}
 
@@ -602,7 +597,7 @@ func connectCmd() {
 						elapsed := time.Since(lastAttempt)
 						if elapsed < minRetryInterval {
 							waitTime := minRetryInterval - elapsed
-							fmt.Printf("[*] Device ID %s использовался недавно, ждем %d секунд...\n",
+							log.Printf("[*] Device ID %s использовался недавно, ждем %d секунд...",
 								prof.DeviceID[:8]+"...", int(waitTime.Seconds()))
 
 							select {
@@ -616,7 +611,7 @@ func connectCmd() {
 			}
 
 			if idx > 0 {
-				fmt.Printf("\n[*] Переключение на профиль '%s'...\n", currentProfile)
+				log.Printf("\n[*] Переключение на профиль '%s'...", currentProfile)
 			}
 
 			for {
@@ -641,7 +636,7 @@ func connectCmd() {
 				}
 
 				if fatalErr && *autoSwitch {
-					fmt.Println("[ERROR] Критическая ошибка при настройке туннеля — авто-переключение остановлено.")
+					log.Println("[ERROR] Критическая ошибка при настройке туннеля — авто-переключение остановлено.")
 					cleanupPidFile(daemonProfile)
 					removeSplitCfg(daemonProfile)
 					_ = teardownWG()
@@ -655,7 +650,7 @@ func connectCmd() {
 				}
 
 				if wasResume {
-					fmt.Printf("[*] Переподключение к профилю '%s' после resume...\n", currentProfile)
+					log.Printf("[*] Переподключение к профилю '%s' после resume...", currentProfile)
 					time.Sleep(2 * time.Second)
 					continue
 				}
@@ -664,17 +659,17 @@ func connectCmd() {
 			}
 
 			if idx < len(profiles)-1 {
-				fmt.Printf("[!] Профиль '%s' не работает, пробуем следующий...\n", currentProfile)
+				log.Printf("[!] Профиль '%s' не работает, пробуем следующий...", currentProfile)
 				time.Sleep(2 * time.Second)
 			}
 		}
 
 		if !*autoSwitch {
-			fmt.Println("[!] Профиль не работает")
+			log.Println("[!] Профиль не работает")
 			os.Exit(1)
 		}
 
-		fmt.Println("[!] Все профили не работают, начинаем сначала...")
+		log.Println("[!] Все профили не работают, начинаем сначала...")
 		time.Sleep(5 * time.Second)
 	}
 }
@@ -705,7 +700,7 @@ func tryConnectProfile(
 	prof, err := loadProfile(profileName)
 	if err != nil {
 		notifyError(profileName, "Ошибка загрузки профиля")
-		fmt.Printf("[ERROR] Ошибка загрузки профиля '%s': %v\n", profileName, err)
+		log.Printf("[ERROR] Ошибка загрузки профиля '%s': %v", profileName, err)
 		if !skipActiveProfileClear {
 			clearActiveProfile()
 		}
@@ -722,7 +717,7 @@ func tryConnectProfile(
 		Password:    prof.Password,
 		Hashes:      prof.Hashes,
 		Listen:      prof.Listen,
-		TurnHost:    prof.TurnHost,
+		TurnHosts:   prof.TurnHosts,
 		TurnPort:    prof.TurnPort,
 		DeviceID:    deviceID,
 		Workers:     workers,
@@ -764,25 +759,27 @@ func tryConnectProfile(
 		cfg.Listen = "127.0.0.1:" + defaultListenPort
 	}
 
-	fmt.Printf("Подключение к профилю '%s'...\n", profileName)
-	fmt.Printf("  Peer: %s\n", cfg.PeerAddr)
-	fmt.Printf("  Workers: %d\n", cfg.Workers)
+	log.Printf("[КЛИЕНТ] Подключение к профилю '%s'...", profileName)
+	log.Println("[КЛИЕНТ] ═════════════════════════════════════════════════")
+	log.Printf("[КЛИЕНТ] Peer: %s", cfg.PeerAddr)
+	log.Printf("[КЛИЕНТ] Workers: %d", cfg.Workers)
 	if mode == "socks" {
-		fmt.Printf("  Mode: SOCKS5 on port %d\n", socksPort)
+		log.Printf("[КЛИЕНТ] Mode: SOCKS5 on port %d", socksPort)
 	} else if mode == "raw" {
-		fmt.Printf("  Mode: raw IP (no WireGuard), server raw port %d\n", rawPort)
+		log.Printf("[КЛИЕНТ] Mode: raw IP (no WireGuard), server raw port %d", rawPort)
 	}
+	log.Println("[КЛИЕНТ] ═════════════════════════════════════════════════")
 
 	if shouldSetActive {
 		if err := setActiveProfile(profileName); err != nil {
-			fmt.Printf("[WARNING] Не удалось сохранить активный профиль: %v\n", err)
+			log.Printf("[WARNING] Не удалось сохранить активный профиль: %v", err)
 		}
 	}
 
 	c, err := core.New(cfg)
 	if err != nil {
 		notifyError(profileName, "Ошибка запуска")
-		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
+		log.Printf("[ERROR] Ошибка запуска: %v", err)
 		if !skipActiveProfileClear {
 			clearActiveProfile()
 		}
@@ -791,7 +788,7 @@ func tryConnectProfile(
 	events, err := c.Start()
 	if err != nil {
 		notifyError(profileName, "Ошибка запуска")
-		fmt.Printf("[ERROR] Ошибка запуска: %v\n", err)
+		log.Printf("[ERROR] Ошибка запуска: %v", err)
 		if !skipActiveProfileClear {
 			clearActiveProfile()
 		}
@@ -832,7 +829,7 @@ func tryConnectProfile(
 	for {
 		select {
 		case result := <-captchaCh:
-			fmt.Println("[*] Получен результат капчи через сокет")
+			log.Println("[*] Получен результат капчи через сокет")
 			c.SolveCaptcha(result)
 		case <-func() <-chan time.Time {
 			if timeout != nil {
@@ -840,7 +837,7 @@ func tryConnectProfile(
 			}
 			return make(<-chan time.Time)
 		}():
-			fmt.Println("[!] Таймаут подключения")
+			log.Println("[!] Таймаут подключения")
 			notifyError(profileName, "Таймаут подключения")
 			c.Stop()
 			teardownMode()
@@ -857,7 +854,7 @@ func tryConnectProfile(
 			}
 			return false, false, false
 		case <-switchProfileCh:
-			fmt.Printf("[*] Принудительное переключение с профиля '%s'...\n", profileName)
+			log.Printf("[*] Принудительное переключение с профиля '%s'...", profileName)
 			c.Stop()
 			teardownMode()
 			return false, false, false
@@ -875,19 +872,19 @@ func tryConnectProfile(
 			case core.EventState:
 				switch ev.Status {
 				case "connecting":
-					fmt.Println("[*] Подключение...")
+					log.Println("[*] Подключение...")
 				case "running":
 					if !connected {
 						connected = true
-						fmt.Println("[OK] Туннель активен")
+						log.Println("[OK] Туннель активен")
 					}
 					if autoSwitch {
 						if err := setAutoswitchCurrentProfile(profileName); err != nil {
-							fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
+							log.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v", err)
 						}
 					}
 				case "disconnected":
-					fmt.Println("[*] Отключено")
+					log.Println("[*] Отключено")
 					teardownMode()
 					if !skipActiveProfileClear {
 						clearActiveProfile()
@@ -896,12 +893,12 @@ func tryConnectProfile(
 				}
 			case core.EventLog:
 				if strings.Contains(ev.Message, "Конфиг получен") {
-					fmt.Printf("[OK] %s\n", ev.Message)
+					log.Printf("[OK] %s", ev.Message)
 				} else if ev.Level == "ERROR" {
-					fmt.Printf("[ERROR] %s\n", ev.Message)
+					log.Printf("[ERROR] %s", ev.Message)
 				} else if strings.Contains(ev.Message, "FATAL") {
 					notifyError(profileName, ev.Message)
-					fmt.Printf("[!] %s\n", ev.Message)
+					log.Printf("[!] %s", ev.Message)
 					c.Stop()
 					teardownMode()
 					if !skipActiveProfileClear {
@@ -910,16 +907,16 @@ func tryConnectProfile(
 					return false, false, false
 				}
 			case core.EventError:
-				fmt.Printf("[ERROR] %s\n", ev.Message)
+				log.Printf("[ERROR] %s", ev.Message)
 			case core.EventEvent:
 				if mode == "raw" && ev.Name == "raw_conf" && !rawConfigured {
 					rawConfigured = true
-					fmt.Printf("[*] Raw конфиг получен: %s\n", ev.Data)
+					log.Printf("[*] Raw конфиг получен: %s", ev.Data)
 
 					if gateway := defaultGateway(); gateway != nil {
 						applyTurnIPsBypass(c.GetTurnIPs(), gateway)
 					} else {
-						fmt.Printf("[WARNING] Не найден default gateway, маршруты к TURN не настроены\n")
+						log.Printf("[WARNING] Не найден default gateway, маршруты к TURN не настроены")
 					}
 
 					// Sync bypass domains of already-running socks profiles too,
@@ -934,11 +931,11 @@ func tryConnectProfile(
 					}
 					addKernelBypassRoutes(mergeBypassDomains(ownDomains, foreignDomains)) // routes tracked in splitRoutes internally
 
-					fmt.Println("[*] Проверка работоспособности туннеля...")
+					log.Println("[*] Проверка работоспособности туннеля...")
 					time.Sleep(2 * time.Second)
 					if err := testRawConnectivity(); err != nil {
 						notifyError(profileName, "Туннель не работает")
-						fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+						log.Printf("[ERROR] Туннель не работает: %v", err)
 						c.Stop()
 						teardownTunnelRoutes()
 						if !skipActiveProfileClear {
@@ -946,17 +943,16 @@ func tryConnectProfile(
 						}
 						return false, false, autoSwitch
 					}
-					fmt.Println("[OK] Туннель работает корректно")
-					fmt.Println("[*] Весь трафик теперь идет через VPN")
+					log.Println("[OK] Туннель работает корректно")
+					log.Println("[*] Весь трафик теперь идет через VPN")
 
 					if splitCfg != nil {
 						_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, splitRoutes)
 					}
 
-					fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 					if autoSwitch {
 						if err := setAutoswitchCurrentProfile(profileName); err != nil {
-							fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
+							log.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v", err)
 						}
 					}
 					notifyConnected(profileName, mode, int32(cfg.Workers))
@@ -970,7 +966,7 @@ func tryConnectProfile(
 					// проверка сделаны в raw_conf выше.
 				} else if ev.Name == "wg_config" && !wgConfigured {
 					wgConfigured = true
-					fmt.Printf("[*] WireGuard конфиг получен (%d байт)\n", len(ev.Data))
+					log.Printf("[*] WireGuard конфиг получен (%d байт)", len(ev.Data))
 
 					if mode == "socks" {
 						var bypassDomains []string
@@ -982,18 +978,18 @@ func tryConnectProfile(
 						wr = core.NewWireproxyRunner(socksPort, socksUser, socksPass, cfg.SocksBindAddr, bypassDomains, bypassIPs)
 						if err := wr.Start(context.Background(), ev.Data); err != nil {
 							notifyError(profileName, "Не удалось запустить SOCKS5 сервер")
-							fmt.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v\n", err)
+							log.Printf("[ERROR] Не удалось запустить SOCKS5 сервер: %v", err)
 							c.Stop()
 							if !skipActiveProfileClear {
 								clearActiveProfile()
 							}
 							return false, false, false
 						}
-						fmt.Printf("[OK] SOCKS5 сервер запущен на порту %d\n", socksPort)
+						log.Printf("[OK] SOCKS5 сервер запущен на порту %d", socksPort)
 						activeWireproxy.Store(wr)
 						cs.SetRouter(wr.Router()) // enable read-only GET_BL for kernel daemons
 						if splitCfg != nil && len(splitCfg.domains) > 0 {
-							fmt.Printf("[*] Split tunnel (blacklist): %d доменов, %d IP напрямую\n",
+							log.Printf("[*] Split tunnel (blacklist): %d доменов, %d IP напрямую",
 								len(splitCfg.domains), len(bypassIPs))
 						}
 						if splitCfg != nil {
@@ -1009,10 +1005,9 @@ func tryConnectProfile(
 							}
 							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, splitCfg.domains, kernelRoutes)
 						}
-						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
 							if err := setAutoswitchCurrentProfile(profileName); err != nil {
-								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
+								log.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v", err)
 							}
 						}
 						notifyConnected(profileName, mode, int32(cfg.Workers))
@@ -1023,7 +1018,7 @@ func tryConnectProfile(
 						}
 					} else {
 						turnIPs := c.GetTurnIPs()
-						fmt.Printf("[*] Настройка интерфейса wg-qwdtt...\n")
+						log.Printf("[*] Настройка интерфейса wg-qwdtt...")
 						// Enrich the bypass list with domains from already-running socks
 						// profiles BEFORE kernel routes are installed, so their
 						// direct (Router-selected) traffic is not captured by our
@@ -1044,7 +1039,7 @@ func tryConnectProfile(
 						}
 						if err := applyWGConfig(ev.Data, turnIPs, splitCfg); err != nil {
 							notifyError(profileName, "Ошибка настройки WireGuard")
-							fmt.Printf("[ERROR] Ошибка настройки WireGuard: %v\n", err)
+							log.Printf("[ERROR] Ошибка настройки WireGuard: %v", err)
 							c.Stop()
 							teardownWG()
 							if !skipActiveProfileClear {
@@ -1058,13 +1053,13 @@ func tryConnectProfile(
 						if splitCfg == nil && len(foreignDomains) > 0 {
 							addKernelBypassRoutes(foreignDomains)
 						}
-						fmt.Println("[OK] WireGuard интерфейс настроен и активен")
+						log.Println("[OK] WireGuard интерфейс настроен и активен")
 
-						fmt.Println("[*] Проверка работоспособности туннеля...")
+						log.Println("[*] Проверка работоспособности туннеля...")
 						time.Sleep(2 * time.Second)
 						if err := testWGConnectivity(); err != nil {
 							notifyError(profileName, "Туннель не работает")
-							fmt.Printf("[ERROR] Туннель не работает: %v\n", err)
+							log.Printf("[ERROR] Туннель не работает: %v", err)
 							c.Stop()
 							teardownWG()
 							if !skipActiveProfileClear {
@@ -1072,17 +1067,16 @@ func tryConnectProfile(
 							}
 							return false, false, autoSwitch
 						}
-						fmt.Println("[OK] Туннель работает корректно")
-						fmt.Println("[*] Весь трафик теперь идет через VPN")
+						log.Println("[OK] Туннель работает корректно")
+						log.Println("[*] Весь трафик теперь идет через VPN")
 
 						if splitCfg != nil {
 							_ = writeSplitCfg(profileName, splitCfg.rawBl, splitCfg.rawFile, origDomains, splitRoutes)
 						}
 
-						fmt.Printf("[*] Активных воркеров: %d\n", cfg.Workers)
 						if autoSwitch {
 							if err := setAutoswitchCurrentProfile(profileName); err != nil {
-								fmt.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v\n", err)
+								log.Printf("[WARNING] Не удалось сохранить текущий профиль autoswitch: %v", err)
 							}
 						}
 						notifyConnected(profileName, mode, int32(cfg.Workers))
@@ -1094,7 +1088,7 @@ func tryConnectProfile(
 					}
 
 				} else if ev.Name == "workers_completed" {
-					fmt.Println("[*] All workers completed")
+					log.Println("[*] All workers completed")
 					teardownMode()
 					if !skipActiveProfileClear {
 						notifyDisconnectedSync(profileName, mode)
@@ -1104,12 +1098,12 @@ func tryConnectProfile(
 				} else if ev.Name == "captcha_required" {
 					parts := strings.Split(ev.Data, "|")
 					if len(parts) >= 1 {
-						fmt.Printf("[!] Captcha required (mode: %s)\n", parts[0])
+						log.Printf("[!] Captcha required (mode: %s)", parts[0])
 					}
 				}
 			case core.EventStats:
 				if connected && wgTested && ev.RxBytes > 0 {
-					fmt.Printf("\r[STATS] RX: %s | TX: %s | Workers: %d   ",
+					log.Printf("\r[СТАТИСТИКА] RX: %s | TX: %s | Workers: %d   ",
 						formatBytes(ev.RxBytes),
 						formatBytes(ev.TxBytes),
 						ev.Workers)
@@ -1121,7 +1115,7 @@ func tryConnectProfile(
 				notifyVKAuth(profileName)
 			}
 		case <-suspendCh:
-			fmt.Println("\n[*] Обнаружен resume, переподключение...")
+			log.Println("\n[*] Обнаружен resume, переподключение...")
 			c.Stop()
 			teardownMode()
 			if !skipActiveProfileClear {

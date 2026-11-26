@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -26,7 +25,7 @@ const (
 	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
-	keepaliveByte = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
+	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
 	// keepaliveInterval: 10с — держит TURN permission/NAT-маппинг "тёплым"
 	// на каждом из 18-108 relay-сокетов сессии.
 	keepaliveInterval = 10 * time.Second
@@ -36,10 +35,13 @@ const (
 	// размер через равные интервалы — легко узнаваемый паттерн для DPI.
 	keepaliveMinSize = 25
 	keepaliveMaxSize = 20 // диапазон добавки к keepaliveMinSize (rand.Intn(20))
+
+	dtlsHandshakeTimeout = 20 * time.Second
+	dtlsFlightInterval   = 500 * time.Millisecond
 )
 
-// Handshake semaphore: limit to 3 concurrent DTLS handshakes
-var handshakeSem = make(chan struct{}, 3)
+// Handshake semaphore: limit to 16 concurrent DTLS handshakes
+var handshakeSem = make(chan struct{}, 16)
 
 // NullLoggerFactory подавляет логи pion
 type NullLoggerFactory struct{}
@@ -55,7 +57,7 @@ func (n *NullLogger) Debugf(_ string, _ ...interface{}) {}
 func (n *NullLogger) Info(_ string)                     {}
 func (n *NullLogger) Infof(_ string, _ ...interface{})  {}
 func (n *NullLogger) Warn(_ string)                     {}
-func (n *NullLogger) Warnf(_ string, _ ...interface{}) {}
+func (n *NullLogger) Warnf(_ string, _ ...interface{})  {}
 func (n *NullLogger) Error(_ string)                    {}
 func (n *NullLogger) Errorf(_ string, _ ...interface{}) {}
 
@@ -121,34 +123,6 @@ func (c *obfsDirectConn) SetDeadline(t time.Time) error      { return c.relay.Se
 func (c *obfsDirectConn) SetReadDeadline(t time.Time) error  { return c.relay.SetReadDeadline(t) }
 func (c *obfsDirectConn) SetWriteDeadline(t time.Time) error { return c.relay.SetWriteDeadline(t) }
 
-// dialTURNConn открывает сокет до TURN-сервера и оборачивает его в
-// net.PacketConn, которого ждёт turn.ClientConfig.Conn. transport выбирает
-// протокол: "tcp" — TCP + turn.NewSTUNConn (штатная возможность pion/turn для
-// STUN/ChannelData framing поверх потокового TCP); "udp" или "" — UDP
-// (по умолчанию). TCP нужно на сетях, где UDP до TURN-relay душится.
-func dialTURNConn(turnAddr string, transport string) (net.PacketConn, io.Closer, error) {
-	if transport != "tcp" {
-		resolved, err := net.ResolveUDPAddr("udp", turnAddr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("резолв TURN: %w", err)
-		}
-		c, err := net.DialUDP("udp", nil, resolved)
-		if err != nil {
-			return nil, nil, fmt.Errorf("подключение TURN UDP: %w", err)
-		}
-		_ = c.SetReadBuffer(socketBufSize)
-		_ = c.SetWriteBuffer(socketBufSize)
-		return &connectedUDPConn{c}, c, nil
-	}
-
-	d := net.Dialer{Timeout: 10 * time.Second}
-	c, err := d.Dial("tcp", turnAddr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("подключение TURN TCP: %w", err)
-	}
-	return turn.NewSTUNConn(c), c, nil
-}
-
 func RunSession(
 	ctx context.Context,
 	tp *TurnParams,
@@ -169,34 +143,19 @@ func RunSession(
 	var firstWireWrite uint32
 	var firstWireRead uint32
 
-	if len(creds.TurnURLs) == 0 {
-		return false, fmt.Errorf("нет TURN URL в учетных данных")
-	}
-	selectedURL := creds.TurnURLs[sessionID%len(creds.TurnURLs)]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("разбор TURN URL %q: %w", selectedURL, err)
+		return false, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.Transport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return false, err
 	}
 	defer turnConnCloser.Close()
 
-	if tp.Transport == "tcp" {
-		log.Printf("[СЕССИЯ #%d] TURN TCP (%s)", sessionID, turnAddr)
-	} else {
-		log.Printf("[СЕССИЯ #%d] TURN UDP (%s)", sessionID, turnAddr)
-	}
+	log.Printf("[СЕССИЯ #%d] TURN %s (%s)", sessionID, strings.ToUpper(target.Transport), turnAddr)
 
 	// RequestedAddressFamily
 	var addrFamily turn.RequestedAddressFamily
@@ -281,7 +240,7 @@ func RunSession(
 	var activeConn net.Conn
 	var relayWg sync.WaitGroup
 
- 	if useWrap && (tp.NoDTLS || tp.RawMode) {
+	if useWrap && (tp.NoDTLS || tp.RawMode) {
 		// ─── Прямой режим: RTP-obfs AEAD прямо поверх TURN relay, без DTLS ───
 		obfsCfg, obfsErr := NewObfsConfig(tp.ObfsMode)
 		if obfsErr != nil {
@@ -314,7 +273,7 @@ func RunSession(
 		})
 		defer stopRelay()
 
- 		// Initialize obfs config per session
+		// Initialize obfs config per session
 		var dtlsObfsCfg *ObfsConfig
 		var obfsWriteState *ObfsState
 		if useWrap {
@@ -418,6 +377,7 @@ func RunSession(
 			CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 			ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
 			MTU:                   1100,
+			FlightInterval:        dtlsFlightInterval,
 			// No ServerName (SNI) — less detectable by DPI
 		}
 
@@ -427,7 +387,7 @@ func RunSession(
 			return false, fmt.Errorf("DTLS клиент: %w", err)
 		}
 
-		hctx, hcancel := context.WithTimeout(sessCtx, 50*time.Second)
+		hctx, hcancel := context.WithTimeout(sessCtx, dtlsHandshakeTimeout)
 		log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 		err = dtlsConn.HandshakeContext(hctx)
 		hcancel()
@@ -704,24 +664,13 @@ func RunPing(
 ) (int64, error) {
 	startPing := time.Now()
 
-	if len(creds.TurnURLs) == 0 {
-		return 0, fmt.Errorf("нет TURN URL")
-	}
-	selectedURL := creds.TurnURLs[0]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, 0)
 	if err != nil {
 		return 0, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.Transport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return 0, err
 	}

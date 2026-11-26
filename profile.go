@@ -13,14 +13,14 @@ type ProfileData struct {
 	Password     string   `json:"password"`
 	Hashes       []string `json:"hashes"`
 	Listen       string   `json:"listen,omitempty"`
-	TurnHost     string   `json:"turn,omitempty"`
+	TurnHosts    []string `json:"turn,omitempty"`
 	TurnPort     string   `json:"turnPort,omitempty"`
 	Workers      int      `json:"workers,omitempty"`
 	DeviceID     string   `json:"device_id,omitempty"`
 	Priority     int      `json:"priority,omitempty"`
-	LinkFile     string   `json:"link_file,omitempty"`     // Path to file containing wdtt:// or qwdtt:// URL
-	Groups       []string `json:"groups,omitempty"`        // Labels for organizing profiles
-	Subscription string   `json:"subscription,omitempty"`  // Name of subscription managing this profile
+	LinkFile     string   `json:"link_file,omitempty"`    // Path to file containing wdtt:// or qwdtt:// URL
+	Groups       []string `json:"groups,omitempty"`       // Labels for organizing profiles
+	Subscription string   `json:"subscription,omitempty"` // Name of subscription managing this profile
 }
 
 func profilePath(name string) string {
